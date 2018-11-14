@@ -9,7 +9,8 @@ from __future__ import print_function, division
 import os  # os模块包含普遍系统的功能，有很多个GPU，指定在第二块GPU上运行本程序
 os.environ['CUDA_VISIBLE_DEVICES'] = "2"
 os.environ['HOMEPATH']
- 
+
+
 import tensorflow as tf
 import numpy as np  # NumPy 是一个 Python 包。 它代表 “Numeric Python”。 它是一个由多维数组对象和用于处理数组的例程集合组成的库
 import datetime
@@ -19,15 +20,15 @@ import sys
 import math   # 支持一些数学函数，以及特定的数学变量
 
 
-code_k = 16     # 信息位码长
-code_n = 32   # 总的码长，可以看出来码率0.5
+code_k = 32     # 信息位码长
+code_n = 64   # 总的码长，可以看出来码率0.5
 code_rate = 1.0*code_k/code_n   # 算码率，有一个浮点数，最后结果就是浮点数了
 n = np.log2(code_n).astype(int)  # BP网络的层数是log2码长
 dd = float("30")   # 迭代次数
 word_seed = 786000
 noise_seed = 345000
 start_snr = 1
-stop_snr = 4
+stop_snr = 1
 snr = np.arange(start_snr,stop_snr+1,1,dtype=np.float32)  # np.arange()函数返回一个有终点和起点的固定步长的排列
 scaling_factor = np.arange(start_snr,stop_snr+1,1,dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
@@ -41,27 +42,26 @@ N_HIDDEN_UNITS = code_n # 每层包含N个神经元
 # numOfWordSim_train = 20
 T_iteration = 10*(n-1)  # 迭代十次的BP算法，等效的网络层数是10*（n-1）
 ii = T_iteration
-epochnum = 30  # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
-batch = 4
-batch_size = 30*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！！
+epochnum = 1  # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
+batch = 1
+batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！！
 # 每个batch_size是120个数，分了四个batch，即每次训练的是480个数？每个数训练30个来回
 gpu_mem_fraction = 0.99 
 clip_tanh = 10.0
-batch_in_epoch = 400  # 每训练400次有一波操作
+batch_in_epoch = 4000  # 每训练400次有一波操作
 batches_for_val = 200
 # num_of_batch = 10000   # 取名有些混乱，这个是训练的次数
-num_of_batch = 1000   # 取名有些混乱，这个是训练的次数
+num_of_batch = 10000000   # 取名有些混乱，这个是训练的次数
 learning_rate = 0.001
-train_on_zero_word = True
+train_on_zero_word = False
 test_on_zero_word = False
 load_weights = False
 is_training = True
-HIDDEN_SIZE = 32      # LSTM中隐藏节点的个数。或许也就是每一层有多少个节点？
+HIDDEN_SIZE = 64      # LSTM中隐藏节点的个数。或许也就是每一层有多少个节点？
 NUM_LAYERS = 2      # LSTM的层数。
 wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed）其中seed的值相同则产生的随机数相同
 random = np.random.RandomState(noise_seed)
-int_quan=8
-Del_quan=-7
+
 
 LR_quan=8
 LRrel_quan=-4
@@ -171,20 +171,25 @@ with tf.name_scope('inputs'):
 
 #  定义网络
     cell = tf.nn.rnn_cell.MultiRNNCell([
-        tf.nn.rnn_cell.BasicLSTMCell(HIDDEN_SIZE)
+        tf.nn.rnn_cell.LSTMCell(HIDDEN_SIZE, name='basic_lstm_cell')
         for _ in range(NUM_LAYERS)])
 
     # 使用TensorFlow接口将多层的LSTM结构连接成RNN网络并计算其前向传播结果。
-    outputs, _ = tf.nn.dynamic_rnn(cell, xs, dtype=tf.float32)
+    xs_expand = tf.expand_dims(xs, axis=2)  # 强行拓展到三维，反正不这么干会出错   # 这里有问题！！！三维是干嘛？！！！
+    outputs, _ = tf.nn.dynamic_rnn(cell, xs_expand, dtype=tf.float32)
     output = outputs[:, -1, :]  # outputs维度是[batch_size,time,HIDDEN_SIZE],但我们只需要最后时刻的输出
+    print(output.shape)
 
+    # 出麻烦了，一增加全连接层就维度变化了，矩阵变成了向量  o((@﹏@))o  难过之后解决这个
     # 对LSTM网络的输出再做加一层全链接层并计算损失。注意这里默认的损失为平均平方差损失函数。
-    predictions = tf.contrib.layers.fully_connected(
-        output, 1, activation_fn=None)  # 不设置激活函数，否则默认为ReLU
-    predictions = tf.nn.dropout(predictions, keep_prob)
+    predictions = tf.contrib.layers.fully_connected(output, code_n, activation_fn=None)  # 不设置激活函数，否则默认为ReLU
+    # predictions = tf.nn.dropout(predictions, keep_prob)  # 防止过度拟合
+    print(predictions.shape)
 
+    # cross entropy loss
+    loss = 1.0 * tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=ys, logits=predictions))  # tf.reduce_mean取均值
     # 计算损失函数。
-    loss = tf.losses.mean_squared_error(labels=ys, predictions=predictions)  # labels是应该输出的东西，是个参照物；predictions是真正输出的东西；
+    # loss = tf.losses.mean_squared_error(labels=ys, predictions=predictions)  # labels是应该输出的东西，是个参照物；predictions是真正输出的东西；
     # 创建模型优化器并得到优化步骤。
     train_op = tf.contrib.layers.optimize_loss(
         loss, tf.train.get_global_step(),
