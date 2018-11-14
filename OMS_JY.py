@@ -20,44 +20,28 @@ import sys
 import math   # 支持一些数学函数，以及特定的数学变量
 
 
-code_k = 32     # 信息位码长
-code_n = 64   # 总的码长，可以看出来码率0.5
+code_k = 8     # 信息位码长
+code_n = 16   # 总的码长，可以看出来码率0.5
 code_rate = 1.0*code_k/code_n   # 算码率，有一个浮点数，最后结果就是浮点数了
-n = np.log2(code_n).astype(int)  # BP网络的层数是log2码长
-dd = float("30")   # 迭代次数
 word_seed = 786000
 noise_seed = 345000
 start_snr = 1
 stop_snr = 1
-snr = np.arange(start_snr,stop_snr+1,1,dtype=np.float32)  # np.arange()函数返回一个有终点和起点的固定步长的排列
-scaling_factor = np.arange(start_snr,stop_snr+1,1,dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
+snr = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # np.arange()函数返回一个有终点和起点的固定步长的排列
+scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
 # ########### Neural network config####################
-
-input_output_layer_size = code_n  # 最外面的输入输出层上的神经元数目就是码长
-# m=24000
-ACTIVITION = tf.nn.sigmoid
-N_LAYERS = n   # 总共7层隐藏层
-N_HIDDEN_UNITS = code_n # 每层包含N个神经元
-# numOfWordSim_train = 20
-T_iteration = 10*(n-1)  # 迭代十次的BP算法，等效的网络层数是10*（n-1）
-ii = T_iteration
 epochnum = 1  # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！！
-# 每个batch_size是120个数，分了四个batch，即每次训练的是480个数？每个数训练30个来回
-gpu_mem_fraction = 0.99 
-clip_tanh = 10.0
-batch_in_epoch = 4000  # 每训练400次有一波操作
-batches_for_val = 200
-# num_of_batch = 10000   # 取名有些混乱，这个是训练的次数
-num_of_batch = 10000000   # 取名有些混乱，这个是训练的次数
-learning_rate = 0.001
+batch_in_epoch = 4000   # 每训练400次有一波操作
+batches_for_val = 500
+num_of_batch = 1000000  # 取名有些混乱，这个是训练的次数
 train_on_zero_word = False
 test_on_zero_word = False
 load_weights = False
 is_training = True
-HIDDEN_SIZE = 64      # LSTM中隐藏节点的个数。或许也就是每一层有多少个节点？
+HIDDEN_SIZE = 64     # LSTM中隐藏节点的个数。或许也就是每一层有多少个节点？
 NUM_LAYERS = 2      # LSTM的层数。
 wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed）其中seed的值相同则产生的随机数相同
 random = np.random.RandomState(noise_seed)
@@ -118,7 +102,6 @@ def polar_transform_iter(u): #encoding
     return x
 
 
-# 真想吐槽一下，这个代码可读性好差！取名混乱，结构也很乱！烦！！！困！！！！！！
 def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
     X = np.zeros([1,code_n], dtype=np.float32)
     Y = np.zeros([1,code_n], dtype=np.int64)
@@ -170,6 +153,7 @@ with tf.name_scope('inputs'):
     keep_prob = tf.placeholder(tf.float32)  # 占位符，相当于定义了函数参数，但是还不赋值，等到要用了再赋值
 
 #  定义网络
+    """
     cell = tf.nn.rnn_cell.MultiRNNCell([
         tf.nn.rnn_cell.LSTMCell(HIDDEN_SIZE, name='basic_lstm_cell')
         for _ in range(NUM_LAYERS)])
@@ -178,28 +162,43 @@ with tf.name_scope('inputs'):
     xs_expand = tf.expand_dims(xs, axis=2)  # 强行拓展到三维，反正不这么干会出错   # 这里有问题！！！三维是干嘛？！！！
     outputs, _ = tf.nn.dynamic_rnn(cell, xs_expand, dtype=tf.float32)
     output = outputs[:, -1, :]  # outputs维度是[batch_size,time,HIDDEN_SIZE],但我们只需要最后时刻的输出
-    print(output.shape)
 
-    # 出麻烦了，一增加全连接层就维度变化了，矩阵变成了向量  o((@﹏@))o  难过之后解决这个
+    """
+    # 直接加入20层的全连接，为毛还是没有用！气炸！！！
+    for i in range(1, 20):
+        if i == 1:
+            predictions = tf.contrib.layers.fully_connected(xs, 6*code_n, activation_fn=tf.nn.relu)
+        else:
+            if i == 19:
+                predictions = tf.contrib.layers.fully_connected(predictions, code_n, activation_fn=tf.nn.sigmoid)
+            else:
+                predictions = tf.contrib.layers.fully_connected(predictions, 6*code_n, activation_fn=tf.nn.relu)
+
+
     # 对LSTM网络的输出再做加一层全链接层并计算损失。注意这里默认的损失为平均平方差损失函数。
-    predictions = tf.contrib.layers.fully_connected(output, code_n, activation_fn=None)  # 不设置激活函数，否则默认为ReLU
+    # predictions = tf.contrib.layers.fully_connected(predictions, code_n, activation_fn=tf.nn.sigmoid)
     # predictions = tf.nn.dropout(predictions, keep_prob)  # 防止过度拟合
-    print(predictions.shape)
 
-    # cross entropy loss
-    loss = 1.0 * tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=ys, logits=predictions))  # tf.reduce_mean取均值
+    # 两种不同的损失函数
+    # cross entropy loss 交叉熵
+    # loss = 1.0 * tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=ys, logits=predictions))
     # 计算损失函数。
-    # loss = tf.losses.mean_squared_error(labels=ys, predictions=predictions)  # labels是应该输出的东西，是个参照物；predictions是真正输出的东西；
+    loss = tf.losses.mean_squared_error(labels=ys, predictions=predictions)  # labels是应该输出的东西，是个参照物；predictions是真正输出的东西；
     # 创建模型优化器并得到优化步骤。
     train_op = tf.contrib.layers.optimize_loss(
         loss, tf.train.get_global_step(),
-        optimizer="Adagrad", learning_rate=0.1)
+        optimizer="Adam", learning_rate=0.001)
 
 # #################################  Train  ####################################
 # 初始化训练模型
 sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))  # 以会话的形式运行运行，sess拥有并管理tensorflow运行时的资源
 sess.run(tf.global_variables_initializer())  # 好像缺少sess.close过程
 saver = tf.train.Saver()  # 程序要保存或者恢复训练好的模型就要这样
+
+# 把当前的计算图输出到tensorboard文件
+writer = tf.summary.FileWriter("logs/", sess.graph)
+writer.close()
+
 # 开始训练与测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
 
@@ -217,7 +216,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         loss_v = np.zeros([1, 1], dtype=np.float32)
 
         for k_sf in scaling_factor:   # 测试四个信噪比
-            for j in range(batches_for_val):  # batches_for_val=200 每个信噪比下测试的数据集为200个mini-batch
+            for j in range(batches_for_val):  # 为了让最终测试的误码率更可靠，计算batches_for_val组数据。最后算平均误码率。
 
                 validation_data, validation_labels = create_mix_epoch(code_k, code_n, batch_size, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
                 y_validation_pred_j, loss_v_j = sess.run(fetches=[predictions, loss], feed_dict={xs: validation_data, ys: validation_labels, keep_prob: 1})
