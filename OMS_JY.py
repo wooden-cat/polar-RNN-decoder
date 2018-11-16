@@ -31,7 +31,8 @@ snr = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # np.arange()函数
 scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
 # ########### Neural network config####################
-epochnum = 1  # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
+# epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
+epochnum = 120  # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！！
 batch_in_epoch = 4000   # 每训练400次有一波操作
@@ -46,9 +47,6 @@ NUM_LAYERS = 2      # LSTM的层数。
 wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed）其中seed的值相同则产生的随机数相同
 random = np.random.RandomState(noise_seed)
 
-
-LR_quan=8
-LRrel_quan=-4
 ###########  init parameters ############
 W_input1 = np.ones((1, code_n), dtype=np.float32)  # 训练的就是这个系数的值
 #Data Generation
@@ -104,19 +102,20 @@ def polar_transform_iter(u): #encoding
 
 def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
     X = np.zeros([1,code_n], dtype=np.float32)
-    Y = np.zeros([1,code_n], dtype=np.int64)
+    Y = np.zeros([1,code_k], dtype=np.int64)
     
     x = np.zeros([numOfWordSim, code_n],dtype=np.int64)  # numOfWordSim这个玩意代入的参数是batch_size=120
     u = np.zeros([numOfWordSim, code_n],dtype=np.int64)
     
     for sf_i in scaling_factor:
         A = polar_design_awgn(code_n, code_k, sf_i)   # A是bool型的玩意，来判断这个信道是不是合适传输的
+        # print("A是这个东西", A)
         if is_zeros_word:
             d = 0*wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # max取值只能到2，不能到1
         else:
             d = wordRandom.randint(0, 2, size=(numOfWordSim, code_k))
         # X[:,0]就是取所有行的第0个数据, X[:,1] 就是取所有行的第1个数据。
-        u[:,A] = d   # u = np.zeros([numOfWordSim, code_n],dtype=np.int64) ，没毛病，u就是120*64的维度，d是120*64的随机数，0,1的随机数，A是64的bool型
+        u[:, A] = d   # u = np.zeros([numOfWordSim, code_n],dtype=np.int64) ，没毛病，u就是120*64的维度，d是120*64的随机数，0,1的随机数，A是64的bool型
         for i in range(0,numOfWordSim):
             x[i] = polar_transform_iter(u[i])
 
@@ -125,7 +124,7 @@ def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word
         X_p_i = random.normal(0.0,1.0,x.shape)*noise + (1)*(1-2*x)  # random.normal按照正态分布取随机数
         x_llr_i = 2*X_p_i/(noise**2)
         X = np.vstack((X,x_llr_i))  # x_llr_i是接收端用来译码的对数似然信息
-        Y = np.vstack((Y,u))  # u是单纯的原始码
+        Y = np.vstack((Y,d))  # u是单纯的原始码
 
     X = X[1:]  # X是编码加噪声后接收端处理过的对数似然信息
     Y = Y[1:]  # Y是最初未编码的0,1信息
@@ -138,22 +137,21 @@ def calc_ber_fer(snr_db, Y_v_pred, Y_v, numOfWordSim):
     ber_test = np.zeros(snr_db.shape[0])
     fer_test = np.zeros(snr_db.shape[0])
     for i in range(0,snr_db.shape[0]):
-        A = polar_design_awgn(code_n, code_k, snr_db[i])
-        Y_v_pred_i = Y_v_pred[i*numOfWordSim:(i+1)*numOfWordSim,A]
-        Y_v_i = Y_v[i*numOfWordSim:(i+1)*numOfWordSim,A]
-        ber_test[i] = 2.0*np.abs(((Y_v_pred_i<0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
+        Y_v_pred_i = Y_v_pred[i*numOfWordSim:(i+1)*numOfWordSim]
+        Y_v_i = Y_v[i*numOfWordSim:(i+1)*numOfWordSim]
+        ber_test[i] = np.abs(((Y_v_pred_i < 0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
         fer_test[i] = (np.abs(np.abs(((Y_v_pred_i<0.5)-Y_v_i))).sum(axis=1)>0).sum()*1.0/Y_v_i.shape[0]  # .sum(axis=1)是把矩阵每一行的数都相加 .shape[0]即行数。0表示第一维行，1表示第二维列
     return ber_test, fer_test
 
 
 with tf.name_scope('inputs'):
-    # batch_size=120,code_n即现在的码长64；但batch_size有乘2，因为把左信息和右信息拼接到一起了
-    xs = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='x_input')   # xs是编码加噪声后接收端处理过的对数似然信息
-    ys = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='y_input')   # ys是最初未编码的0,1信息
+   # xs = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='x_input')   # xs是编码加噪声后接收端处理过的对数似然信息
+   # ys = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='y_input')   # ys是最初未编码的0,1信息
     keep_prob = tf.placeholder(tf.float32)  # 占位符，相当于定义了函数参数，但是还不赋值，等到要用了再赋值
 
 #  定义网络
     """
+    # @————@   定义多层lstm网络
     cell = tf.nn.rnn_cell.MultiRNNCell([
         tf.nn.rnn_cell.LSTMCell(HIDDEN_SIZE, name='basic_lstm_cell')
         for _ in range(NUM_LAYERS)])
@@ -162,9 +160,14 @@ with tf.name_scope('inputs'):
     xs_expand = tf.expand_dims(xs, axis=2)  # 强行拓展到三维，反正不这么干会出错   # 这里有问题！！！三维是干嘛？！！！
     outputs, _ = tf.nn.dynamic_rnn(cell, xs_expand, dtype=tf.float32)
     output = outputs[:, -1, :]  # outputs维度是[batch_size,time,HIDDEN_SIZE],但我们只需要最后时刻的输出
+    
+    # 对LSTM网络的输出再做加一层全链接层并计算损失。注意这里默认的损失为平均平方差损失函数。
+    predictions = tf.contrib.layers.fully_connected(predictions, code_n, activation_fn=tf.nn.sigmoid)
+    predictions = tf.nn.dropout(predictions, keep_prob)  # 防止过度拟合
 
     """
-    # 直接加入20层的全连接，为毛还是没有用！气炸！！！
+    '''
+    # @————@    直接用封装加入20层的全连接，为毛还是没有用！气炸！！！
     for i in range(1, 20):
         if i == 1:
             predictions = tf.contrib.layers.fully_connected(xs, 6*code_n, activation_fn=tf.nn.relu)
@@ -173,11 +176,6 @@ with tf.name_scope('inputs'):
                 predictions = tf.contrib.layers.fully_connected(predictions, code_n, activation_fn=tf.nn.sigmoid)
             else:
                 predictions = tf.contrib.layers.fully_connected(predictions, 6*code_n, activation_fn=tf.nn.relu)
-
-
-    # 对LSTM网络的输出再做加一层全链接层并计算损失。注意这里默认的损失为平均平方差损失函数。
-    # predictions = tf.contrib.layers.fully_connected(predictions, code_n, activation_fn=tf.nn.sigmoid)
-    # predictions = tf.nn.dropout(predictions, keep_prob)  # 防止过度拟合
 
     # 两种不同的损失函数
     # cross entropy loss 交叉熵
@@ -188,6 +186,41 @@ with tf.name_scope('inputs'):
     train_op = tf.contrib.layers.optimize_loss(
         loss, tf.train.get_global_step(),
         optimizer="Adam", learning_rate=0.001)
+    '''
+
+    # @————@   用最原始自己手动的方式配置全连接网络，如果这都出错，那估计判决误码率的模块有问题了！
+    Layer1 = 128
+    Layer2 = 64
+    Layer3 = 32
+    Layer4 = code_k
+
+    # xs = tf.placeholder(tf.float32, [None, code_n])
+    # ys = tf.placeholder(tf.float32, [None, code_n])
+    xs = tf.placeholder(tf.float32, [epochnum, code_n])
+    ys = tf.placeholder(tf.float32, [epochnum, code_k])
+
+    W1 = tf.Variable(tf.random_uniform([code_n, Layer1], -1.0, 1.0))
+    W2 = tf.Variable(tf.random_uniform([Layer1, Layer2], -1.0, 1.0))
+    W3 = tf.Variable(tf.random_uniform([Layer2, Layer3], -1.0, 1.0))
+    W4 = tf.Variable(tf.random_uniform([Layer3, Layer4], -1.0, 1.0))
+
+    b1 = tf.Variable(tf.zeros([Layer1]), name="Bias1")
+    b2 = tf.Variable(tf.zeros([Layer2]), name="Bias2")
+    b3 = tf.Variable(tf.zeros([Layer3]), name="Bias3")
+    b4 = tf.Variable(tf.zeros([Layer4]), name="Bias4")
+
+    L1 = tf.nn.relu(tf.matmul(xs, W1) + b1)
+    L2 = tf.nn.relu(tf.matmul(L1, W2) + b2)
+    L3 = tf.nn.relu(tf.matmul(L2, W3) + b3)
+
+    predictions = tf.nn.sigmoid(tf.matmul(L3, W4) + b4)
+    h2 = tf.maximum(predictions, 0.)
+    hypo = tf.minimum(1., h2)
+
+    loss = tf.reduce_mean(tf.square(ys - predictions))
+    optimizer = tf.train.AdamOptimizer()
+    train_op = optimizer.minimize(loss)
+
 
 # #################################  Train  ####################################
 # 初始化训练模型
@@ -206,13 +239,15 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
     training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor, is_zeros_word=train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
     # 每运行一次更新一次fetch里的值 ; 反正就是在更新网络；没必要用fetch语句；y_output, loss没必要fetch输出
     # 首先占位符申请空间；使用的时候，通过占位符“喂（feed_dict）”给程序。feed_dict的作用是给使用placeholder创建出来的tensor赋值;运行之后用fetch把想要的值给取出来
+    # print(training_labels)
+
     _, _, _ = sess.run(fetches=[predictions, loss, train_op], feed_dict={xs: training_data, ys: training_labels, keep_prob: 1})  # 多了个train_step这就是在修改网络参数
 
     # validation
     if i % batch_in_epoch == 0:  # batch_in_epoch=400
         print('Finish Epoch - ', i/batch_in_epoch)
-        y_validation = np.zeros([1,code_n], dtype=np.float32)
-        y_validation_pred = np.zeros([1,code_n], dtype=np.float32)
+        y_validation = np.zeros([1,code_k], dtype=np.float32)
+        y_validation_pred = np.zeros([1,code_k], dtype=np.float32)
         loss_v = np.zeros([1, 1], dtype=np.float32)
 
         for k_sf in scaling_factor:   # 测试四个信噪比
@@ -220,6 +255,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
 
                 validation_data, validation_labels = create_mix_epoch(code_k, code_n, batch_size, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
                 y_validation_pred_j, loss_v_j = sess.run(fetches=[predictions, loss], feed_dict={xs: validation_data, ys: validation_labels, keep_prob: 1})
+                print("预测值y_validation_pred_j是：", y_validation_pred_j)
 
                 y_validation = np.vstack((y_validation,validation_labels))
                 y_validation_pred = np.vstack((y_validation_pred,y_validation_pred_j))
