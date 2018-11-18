@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jan 24 09:59:07 2018
-
-@author: bid317
+训练数据是固定码长下全部可能码字都进行训练
+测试时随机产生码子进行测试
 """
 
 from __future__ import print_function, division
@@ -29,8 +28,8 @@ code_n = 16   # 总的码长，可以看出来码率0.5
 code_rate = 1.0*code_k/code_n   # 算码率，有一个浮点数，最后结果就是浮点数了
 word_seed = 786000
 noise_seed = 345000
-start_snr = 1
-stop_snr = 1
+start_snr = 6
+stop_snr = 6
 snr = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # np.arange()函数返回一个有终点和起点的固定步长的排列
 scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
@@ -38,11 +37,12 @@ scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang
 # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
 epochnum = 64   # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
 batch = 1
-batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！！
-batch_in_epoch = 100    # 每训练400次有一波操作
+batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
+batch_size_validation = 16
+batch_in_epoch = 50    # 每训练400次有一波操作
 batches_for_val = 5     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
 num_of_batch = 10000000  # 取名有些混乱，这个是训练的次数
-LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
+LEARNING_RATE = 0.0003  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
 load_weights = False
@@ -51,8 +51,6 @@ HIDDEN_SIZE = 64     # LSTM中隐藏节
 NUM_LAYERS = 2      # LSTM的层数。
 wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed）其中seed的值相同则产生的随机数相同
 random = np.random.RandomState(noise_seed)
-
-
 
 
 def bitrevorder(x):
@@ -163,6 +161,44 @@ def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word
 
     return X, Y
 
+
+def create_mix_epoch_validation(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
+    X = np.zeros([1, code_n], dtype=np.float32)
+    Y = np.zeros([1, code_k], dtype=np.int64)
+
+    x = np.zeros([numOfWordSim, code_n], dtype=np.int64)  # numOfWordSim这个玩意代入的参数是batch_size=120
+    u = np.zeros([numOfWordSim, code_n], dtype=np.int64)
+    d = np.zeros([numOfWordSim, code_k], dtype=np.int64)
+    for sf_i in scaling_factor:
+        A = polar_design_awgn(code_n, code_k, sf_i)  # A是bool型的玩意，来判断这个信道是不是合适传输的
+        # print("A是这个东西", A)
+        # #### 在这里加入循环！！！！！！！！！！！！！！
+        if is_zeros_word:  # 用全0数据训练
+            d = 0 * wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # max取值只能到2，不能到1
+        else:
+            # 把d变成1，2,3,4,5然后转化为2进制，从而遍历所有的情况，看看是不是我的网络设置有毛病
+            # for k in range(1, numOfWordSim):  # 在码长固定的情况下遍历所有的可能情况
+            #   d[k] = inc_bin(d[k - 1])
+            d = wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # 随机生成训练数据
+
+        # print(d)
+        # X[:,0]就是取所有行的第0个数据, X[:,1] 就是取所有行的第1个数据。
+        u[:, A] = d  # u = np.zeros([numOfWordSim, code_n],dtype=np.int64) ，没毛病，u就是120*64的维度，d是120*64的随机数，0,1的随机数，A是64的bool型
+        for i in range(0, numOfWordSim):
+            x[i] = polar_transform_iter(u[i])
+
+        snr_lin = 10.0 ** (sf_i / 10.0)
+        noise = np.sqrt(1.0 / (2.0 * snr_lin * code_rate))
+        X_p_i = random.normal(0.0, 1.0, x.shape) * noise + (1) * (1 - 2 * x)  # random.normal按照正态分布取随机数
+        x_llr_i = 2 * X_p_i / (noise ** 2)
+        X = np.vstack((X, x_llr_i))  # x_llr_i是接收端用来译码的对数似然信息
+        Y = np.vstack((Y, d))  # u是单纯的原始码
+
+    X = X[1:]  # X是编码加噪声后接收端处理过的对数似然信息
+    Y = Y[1:]  # Y是最初未编码的0,1信息
+
+    return X, Y
+
 # 计算误码率误帧率
 def calc_ber_fer(snr_db, Y_v_pred, Y_v, numOfWordSim):
     ber_test = np.zeros(snr_db.shape[0])
@@ -218,7 +254,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         for k_sf in scaling_factor:   # 测试四个信噪比
             for j in range(batches_for_val):  # 为了让最终测试的误码率更可靠，计算batches_for_val组数据。最后算平均误码率。
 
-                validation_data, validation_labels = create_mix_epoch(code_k, code_n, batch_size, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
+                validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
                 # print(validation_data.shape)
                 validation_data = tf.reshape(validation_data, (-1, 16, 1))
                 # print(validation_data.shape)
@@ -229,7 +265,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
                 y_validation_pred = np.vstack((y_validation_pred, y_validation_pred_j))
 
         y_validation_pred = 1.0 / (1.0 + np.exp(-1.0 * y_validation_pred))   # 用sigmoid函数把输出量化到0~1之间
-        ber_val, fer_val = calc_ber_fer(snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size*batches_for_val)
+        ber_val, fer_val = calc_ber_fer(snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size_validation*batches_for_val)
 
         # print & write to file
         print('SNR[dB] validation - ', snr)
