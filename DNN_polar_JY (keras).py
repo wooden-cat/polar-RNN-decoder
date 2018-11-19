@@ -34,13 +34,13 @@ scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang
 
 # ########### Neural network config####################
 # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
-epochnum = 64   # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
+epochnum = 256   # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
 batch_size_validation = 16  # 用于验证的码字有这么多一组
-batch_in_epoch = 400    # 每训练这么多次有一波计算误码率的操作
+batch_in_epoch = 10000    # 每训练这么多次有一波计算误码率的操作
 batches_for_val = 10     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 10000000  # 取名有些混乱，这个是训练的次数
+num_of_batch = 1000000000  # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
@@ -230,18 +230,18 @@ with tf.name_scope('inputs'):
 '''
 # keras模型定义网络
 model = Sequential()
-model.add(Dense(128, activation='relu', input_dim=16))
+model.add(Dense(128, activation='relu', use_bias=True, input_dim=16))
 model.add(BatchNormalization())  # 每层的输入要做标准化
-model.add(Dense(64, activation='relu'))
+model.add(Dense(64, activation='relu', use_bias=True))
 model.add(BatchNormalization())
-model.add(Dense(32, activation='relu'))
+model.add(Dense(32, activation='relu', use_bias=True))
 model.add(BatchNormalization())
-model.add(Dense(16, activation='relu'))
+model.add(Dense(16, activation='relu', use_bias=True))
 model.add(BatchNormalization())
 model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译模型
 optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
 model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
-# print(model.summary())   # 打印输出检查一下网络
+print(model.summary())   # 打印输出检查一下网络
 # #################################  Train  ##################################
 # 开始训练与测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
@@ -259,6 +259,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
     # validation
     if i % batch_in_epoch == 0:  # batch_in_epoch=400
         print('Finish Epoch - ', i/batch_in_epoch)
+        print('训练模型的cost值为：', cost)
         y_validation = np.zeros([1,code_k], dtype=np.float32)
         y_validation_pred = np.zeros([1,code_k], dtype=np.float32)
 
