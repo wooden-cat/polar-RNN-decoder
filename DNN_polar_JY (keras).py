@@ -37,11 +37,11 @@ scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang
 epochnum = 64   # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
-batch_size_validation = 16
-batch_in_epoch = 50    # 每训练400次有一波操作
-batches_for_val = 5     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
+batch_size_validation = 16  # 用于验证的码字有这么多一组
+batch_in_epoch = 400    # 每训练这么多次有一波计算误码率的操作
+batches_for_val = 10     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
 num_of_batch = 10000000  # 取名有些混乱，这个是训练的次数
-LEARNING_RATE = 0.0003  # 学习率 不设置的话函数自动默认是0.001
+LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
 load_weights = False
@@ -230,7 +230,7 @@ with tf.name_scope('inputs'):
 '''
 # keras模型定义网络
 model = Sequential()
-model.add(Dense(128, activation='relu'))
+model.add(Dense(128, activation='relu', input_dim=16))
 model.add(BatchNormalization())  # 每层的输入要做标准化
 model.add(Dense(64, activation='relu'))
 model.add(BatchNormalization())
@@ -241,7 +241,7 @@ model.add(BatchNormalization())
 model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译模型
 optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
 model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
-print(model.summary())   # 打印输出检查一下网络
+# print(model.summary())   # 打印输出检查一下网络
 # #################################  Train  ##################################
 # 开始训练与测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
@@ -250,7 +250,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
     training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor, is_zeros_word = train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
     # print(training_labels.shape)
     # print(training_data.shape)
-    training_data = tf.reshape(training_data, (-1, 16, 1))
+    # training_data = tf.reshape(training_data, (-1, 16, 1))
     # training_labels = tf.reshape(training_labels, (-1, 8, 1))
     # print(training_labels.shape)
     # print(training_data.shape)
@@ -267,7 +267,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
 
                 validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
                 # print(validation_data.shape)
-                validation_data = tf.reshape(validation_data, (-1, 16, 1))
+                # validation_data = tf.reshape(validation_data, (-1, 16, 1))
                 # print(validation_data.shape)
                 y_validation_pred_j = model.predict(validation_data, steps=1)  # 这里的输出是个范围很大的数，不是局限在0~1之间的
                 # print("预测值y_validation_pred_j形状是：", y_validation_pred_j.shape)
