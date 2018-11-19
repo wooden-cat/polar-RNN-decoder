@@ -2,6 +2,8 @@
 """
 训练数据是固定码长下全部可能码字都进行训练
 测试时随机产生码子进行测试
+目前的毛病就是训练速度太慢了一些
+训练几个小时，最终0.03误码率左右
 """
 
 from __future__ import print_function, division
@@ -35,20 +37,19 @@ scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang
 
 # ########### Neural network config####################
 # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
-epochnum = 64   # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
+epochnum = 256   # 每次训练这么多组code_n bit的码字，必须为2**code_k
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
 batch_size_validation = 16
-batch_in_epoch = 50    # 每训练400次有一波操作
+batch_in_epoch = 100    # 每训练400次有一波操作
 batches_for_val = 5     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 10000000  # 取名有些混乱，这个是训练的次数
+num_of_batch = 80000   # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0003  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
 load_weights = False
 is_training = True
-HIDDEN_SIZE = 64     # LSTM中隐藏节
-NUM_LAYERS = 2      # LSTM的层数。
+HIDDEN_SIZE = 64     # LSTM中隐藏层，就是状态向量的维度
 wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed）其中seed的值相同则产生的随机数相同
 random = np.random.RandomState(noise_seed)
 
@@ -203,8 +204,11 @@ def create_mix_epoch_validation(code_k, code_n, numOfWordSim, scaling_factor, is
 def calc_ber_fer(snr_db, Y_v_pred, Y_v, numOfWordSim):
     ber_test = np.zeros(snr_db.shape[0])
     fer_test = np.zeros(snr_db.shape[0])
+    # print('Y_v_pred.shape', Y_v_pred.shape)
+    # print('Y_v.shape', Y_v.shape)
     for i in range(0,snr_db.shape[0]):
         Y_v_pred_i = Y_v_pred[i*numOfWordSim:(i+1)*numOfWordSim]
+        # print('Y_v_pred_i.shape', Y_v_pred_i.shape)
         Y_v_i = Y_v[i*numOfWordSim:(i+1)*numOfWordSim]
         # 实在把不准这个误码的判决条件！这个还需要仔细考虑！！！
         ber_test[i] = np.abs(((Y_v_pred_i > 0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
@@ -228,32 +232,33 @@ with tf.name_scope('inputs'):
 '''
 # keras模型定义网络
 model = Sequential()
-model.add(Bidirectional(LSTM(100, return_sequences=True, recurrent_dropout=0.5),  # 双向LSTM
+model.add(Bidirectional(LSTM(HIDDEN_SIZE, return_sequences=True, recurrent_dropout=0.5),  # 双向LSTM
                             input_shape=(None, 1)))
 model.add(BatchNormalization())  # 每层的输入要做标准化
-model.add(Bidirectional(LSTM(100, recurrent_dropout=0.5, )))
+model.add(Bidirectional(LSTM(HIDDEN_SIZE, recurrent_dropout=0.5, )))
 model.add(BatchNormalization())
-model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译模型
+model.add(Dense(code_k, activation='sigmoid'))  # 模型搭建完用compile来编译模型
 optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
 model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
-
+print(model.summary())   # 打印输出检查一下网络
 # #################################  Train  ##################################
 # 开始训练与测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
 
     # training
     training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor, is_zeros_word = train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
-    print(training_labels.shape)
-    print(training_data.shape)
+    # print(training_labels.shape)
+    # print(training_data.shape)
     training_data = tf.reshape(training_data, (-1, 16, 1))
-    training_labels = tf.reshape(training_labels, (-1, 8, 1))
-    print(training_labels.shape)
-    print(training_data.shape)
+    # training_labels = tf.reshape(training_labels, (-1, 8, 1))
+    # print(training_labels.shape)
+    # print(training_data.shape)
     cost = model.train_on_batch(training_data, training_labels)   # 感觉这句有问题，或许改成fit会更好？ 输入的数据就是一组batch，这一组batch一起更新一次参数
 
     # validation
     if i % batch_in_epoch == 0:  # batch_in_epoch=400
         print('Finish Epoch - ', i/batch_in_epoch)
+        print('训练模型的cost值为：', cost)
         y_validation = np.zeros([1,code_k], dtype=np.float32)
         y_validation_pred = np.zeros([1,code_k], dtype=np.float32)
 
@@ -266,11 +271,12 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
                 # print(validation_data.shape)
                 y_validation_pred_j = model.predict(validation_data, steps=1)  # 这里的输出是个范围很大的数，不是局限在0~1之间的
                 # print("预测值y_validation_pred_j形状是：", y_validation_pred_j.shape)
-                # print(y_validation_pred_j)
+                # print('y_validation_pred_j', y_validation_pred_j)
 
                 y_validation = np.vstack((y_validation, validation_labels))  # 用于验证的发送端产生的原始数据
                 y_validation_pred = np.vstack((y_validation_pred, y_validation_pred_j))
-
+        # print('y_validation.shape', y_validation.shape)
+        # print('y_validation_pred.shape', y_validation_pred.shape)
         # y_validation_pred = 1.0 / (1.0 + np.exp(-1.0 * y_validation_pred))   # 用sigmoid函数把输出量化到0~1之间
         ber_val, fer_val = calc_ber_fer(snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size_validation*batches_for_val)
 
@@ -278,3 +284,10 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         print('SNR[dB] validation - ', snr)
         print('BER validation - ', ber_val)
         print('FER validation - ', fer_val)  # FER frame error rates 误帧率
+
+
+# 在整个for循环结束，完成全部训练之后：才开始进行画图和存储训练网络这些后续工作
+
+# 全部训练完存储模型
+model.save('LSTM_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
+model.save_weights('LSTM_model_weights_JY.h5')   # 只保留权重参数

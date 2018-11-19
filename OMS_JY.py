@@ -13,6 +13,16 @@ os.environ['HOMEPATH']
 
 import tensorflow as tf
 import numpy as np  # NumPy 是一个 Python 包。 它代表 “Numeric Python”。 它是一个由多维数组对象和用于处理数组的例程集合组成的库
+
+from keras.layers import BatchNormalization, Activation, ZeroPadding2D
+from keras.models import Sequential, Model
+from keras.layers.core import Dense, Lambda
+from keras.optimizers import RMSprop, Adam
+from keras.layers import SimpleRNN,LSTM, GRU, Activation
+from keras.layers.wrappers import  Bidirectional
+
+
+
 import datetime
 from shutil import copyfile
 import matplotlib.pyplot as pltf
@@ -32,23 +42,22 @@ scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang
 
 # ########### Neural network config####################
 # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
-epochnum = 120  # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
+epochnum = 200  # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！！
-batch_in_epoch = 4000   # 每训练400次有一波操作
-batches_for_val = 500
-num_of_batch = 1000000  # 取名有些混乱，这个是训练的次数
+batch_in_epoch = 1000    # 每训练400次有一波操作
+batches_for_val = 100    # 貌似使用这个来计算误帧率
+num_of_batch = 10000000  # 取名有些混乱，这个是训练的次数
+LEARNING_RATE = 0.01  # 学习率
 train_on_zero_word = False
 test_on_zero_word = False
 load_weights = False
 is_training = True
-HIDDEN_SIZE = 64     # LSTM中隐藏节点的个数。或许也就是每一层有多少个节点？
+HIDDEN_SIZE = 64     # LSTM中隐藏节
 NUM_LAYERS = 2      # LSTM的层数。
 wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed）其中seed的值相同则产生的随机数相同
 random = np.random.RandomState(noise_seed)
 
-###########  init parameters ############
-W_input1 = np.ones((1, code_n), dtype=np.float32)  # 训练的就是这个系数的值
 #Data Generation
 
 
@@ -95,8 +104,8 @@ def polar_transform_iter(u): #encoding
             for j in range(0,n): # 每轮的步长是n，j表示n步长内的操作
                 idx = i+j
                 x[idx] = x[idx] ^ x[idx+n]  # ^按位异或
-            i=i+2*n
-        n=2*n  # 步长n逐层翻倍
+            i = i+2*n
+        n = 2*n  # 步长n逐层翻倍
     return x
 
 
@@ -131,7 +140,6 @@ def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word
         
     return X, Y
 
-
 # 计算误码率误帧率
 def calc_ber_fer(snr_db, Y_v_pred, Y_v, numOfWordSim):
     ber_test = np.zeros(snr_db.shape[0])
@@ -139,43 +147,71 @@ def calc_ber_fer(snr_db, Y_v_pred, Y_v, numOfWordSim):
     for i in range(0,snr_db.shape[0]):
         Y_v_pred_i = Y_v_pred[i*numOfWordSim:(i+1)*numOfWordSim]
         Y_v_i = Y_v[i*numOfWordSim:(i+1)*numOfWordSim]
-        ber_test[i] = np.abs(((Y_v_pred_i < 0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
-        fer_test[i] = (np.abs(np.abs(((Y_v_pred_i<0.5)-Y_v_i))).sum(axis=1)>0).sum()*1.0/Y_v_i.shape[0]  # .sum(axis=1)是把矩阵每一行的数都相加 .shape[0]即行数。0表示第一维行，1表示第二维列
+        # 实在把不准这个误码的判决条件！这个还需要仔细考虑！！！
+        ber_test[i] = np.abs(((Y_v_pred_i > 0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
+        fer_test[i] = (np.abs(np.abs(((Y_v_pred_i > 0.5)-Y_v_i))).sum(axis=1) > 0).sum()*1.0/Y_v_i.shape[0]  # .sum(axis=1)是把矩阵每一行的数都相加 .shape[0]即行数。0表示第一维行，1表示第二维列
     return ber_test, fer_test
 
 
 with tf.name_scope('inputs'):
-   # xs = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='x_input')   # xs是编码加噪声后接收端处理过的对数似然信息
-   # ys = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='y_input')   # ys是最初未编码的0,1信息
+    xs = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='x_input')   # xs是编码加噪声后接收端处理过的对数似然信息
+    ys = tf.placeholder(tf.float32, shape=[batch_size, code_k], name='y_input')   # ys是最初未编码的0,1信息
     keep_prob = tf.placeholder(tf.float32)  # 占位符，相当于定义了函数参数，但是还不赋值，等到要用了再赋值
 
-#  定义网络
-    """
-    # @————@   定义多层lstm网络
-    cell = tf.nn.rnn_cell.MultiRNNCell([
-        tf.nn.rnn_cell.LSTMCell(HIDDEN_SIZE, name='basic_lstm_cell')
+# 定义网络
+'''
+    # 用keras的方式搭配网络
+    model = Sequential()
+    # model.add(input_layer(shape=(None,2)))
+    model.add(Bidirectional(LSTM(32, return_sequences=True, recurrent_dropout=0.5),  # 双向LSTM
+                            input_shape=(None, 1)))
+    model.add(BatchNormalization())  # 每层的输入要做标准化
+    model.add(Bidirectional(LSTM(32, recurrent_dropout=0.5, )))
+    model.add(BatchNormalization())
+    model.add(Dense(8))
+    # model.add(Activation('softmax'))
+    # 模型搭建完用compile来编译模型
+    model.compile(loss='mean_squared_error', optimizer='Adam', metrics=['accuracy'])
+    
+'''
+#'''
+# @————@   定义多层lstm网络 还是凉凉呀
+cell = tf.nn.rnn_cell.MultiRNNCell([
+        tf.nn.rnn_cell.LSTMCell(HIDDEN_SIZE, name='basic_lstm_cell', return_sequences=True)
         for _ in range(NUM_LAYERS)])
 
     # 使用TensorFlow接口将多层的LSTM结构连接成RNN网络并计算其前向传播结果。
-    xs_expand = tf.expand_dims(xs, axis=2)  # 强行拓展到三维，反正不这么干会出错   # 这里有问题！！！三维是干嘛？！！！
-    outputs, _ = tf.nn.dynamic_rnn(cell, xs_expand, dtype=tf.float32)
-    output = outputs[:, -1, :]  # outputs维度是[batch_size,time,HIDDEN_SIZE],但我们只需要最后时刻的输出
-    
+xs_expand = tf.reshape(xs, (-1, 16, 1))  # 改变xs的维度   X_train=X_train.reshape(-1,TIME_STEPS,INPUT_SIZE) 借鉴胡杨的
+outputs, _ = tf.nn.dynamic_rnn(cell, xs_expand, dtype=tf.float32)
+    # print(outputs) outputs维度是[batch_size,time,HIDDEN_SIZE],但我们只需要最后时刻的输出  !@___@! 好像这里不对！
+    # print("predictions.shape 简化前", outputs.shape)
     # 对LSTM网络的输出再做加一层全链接层并计算损失。注意这里默认的损失为平均平方差损失函数。
-    predictions = tf.contrib.layers.fully_connected(predictions, code_n, activation_fn=tf.nn.sigmoid)
-    predictions = tf.nn.dropout(predictions, keep_prob)  # 防止过度拟合
+predictions = tf.contrib.layers.fully_connected(outputs, 1, activation_fn=tf.nn.sigmoid) # 输出维数设为1，输出的就是（batch_size,time_timesteps.1）
+    # print("predictions.shape 简化后", predictions.shape)
+predictions = predictions[:, :, -1]
+predictions = tf.layers.dense(predictions, code_k)
+    #print("predictions.shape 再经过了一个全连接层", predictions.shape)
+    # 计算损失函数。
+loss = tf.losses.mean_squared_error(labels=ys, predictions=predictions)  # labels是应该输出的东西，是个参照物；predictions是真正输出的东西；
+    # 创建模型优化器并得到优化步骤。
+train_op = tf.contrib.layers.optimize_loss(
+    loss, tf.train.get_global_step(),
+    optimizer="Adam", learning_rate=LEARNING_RATE)
 
-    """
-    '''
+# '''
+
+'''
     # @————@    直接用封装加入20层的全连接，为毛还是没有用！气炸！！！
-    for i in range(1, 20):
+    xs = tf.placeholder(tf.float32, [epochnum, code_n])
+    ys = tf.placeholder(tf.float32, [epochnum, code_k])
+    for i in range(1, 5):
         if i == 1:
-            predictions = tf.contrib.layers.fully_connected(xs, 6*code_n, activation_fn=tf.nn.relu)
+            predictions = tf.contrib.layers.fully_connected(xs, 4*code_n, activation_fn=tf.nn.relu)
         else:
-            if i == 19:
-                predictions = tf.contrib.layers.fully_connected(predictions, code_n, activation_fn=tf.nn.sigmoid)
+            if i == 4:
+                predictions = tf.contrib.layers.fully_connected(predictions, code_k, activation_fn=tf.nn.sigmoid)
             else:
-                predictions = tf.contrib.layers.fully_connected(predictions, 6*code_n, activation_fn=tf.nn.relu)
+                predictions = tf.contrib.layers.fully_connected(predictions, 4*code_n, activation_fn=tf.nn.relu)
 
     # 两种不同的损失函数
     # cross entropy loss 交叉熵
@@ -185,10 +221,12 @@ with tf.name_scope('inputs'):
     # 创建模型优化器并得到优化步骤。
     train_op = tf.contrib.layers.optimize_loss(
         loss, tf.train.get_global_step(),
-        optimizer="Adam", learning_rate=0.001)
-    '''
+        optimizer="Adam", learning_rate=0.003)
+'''
 
+'''
     # @————@   用最原始自己手动的方式配置全连接网络，如果这都出错，那估计判决误码率的模块有问题了！
+    # 最终训练达到0.09误码率，0.3误帧率，码长16,8；
     Layer1 = 128
     Layer2 = 64
     Layer3 = 32
@@ -214,14 +252,11 @@ with tf.name_scope('inputs'):
     L3 = tf.nn.relu(tf.matmul(L2, W3) + b3)
 
     predictions = tf.nn.sigmoid(tf.matmul(L3, W4) + b4)
-    h2 = tf.maximum(predictions, 0.)
-    hypo = tf.minimum(1., h2)
-
     loss = tf.reduce_mean(tf.square(ys - predictions))
-    optimizer = tf.train.AdamOptimizer()
+    optimizer = tf.train.AdamOptimizer(learning_rate=0.001)
     train_op = optimizer.minimize(loss)
 
-
+'''
 # #################################  Train  ####################################
 # 初始化训练模型
 sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))  # 以会话的形式运行运行，sess拥有并管理tensorflow运行时的资源
@@ -255,14 +290,16 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
 
                 validation_data, validation_labels = create_mix_epoch(code_k, code_n, batch_size, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
                 y_validation_pred_j, loss_v_j = sess.run(fetches=[predictions, loss], feed_dict={xs: validation_data, ys: validation_labels, keep_prob: 1})
-                print("预测值y_validation_pred_j是：", y_validation_pred_j)
+                # print("预测值y_validation_pred_j是：", y_validation_pred_j)
 
-                y_validation = np.vstack((y_validation,validation_labels))
+                y_validation = np.vstack((y_validation,validation_labels))  # 用于验证的发送端产生的原始数据
                 y_validation_pred = np.vstack((y_validation_pred,y_validation_pred_j))
                 loss_v = np.vstack((loss_v, loss_v_j))
 
         #JY:公式（11），y_v_pred是公式中x
         y_validation_pred = 1.0 / (1.0 + np.exp(-1.0 * y_validation_pred))   # 用sigmoid函数把输出量化到0~1之间
+        # print('y_validation_pred ', '\n', y_validation_pred)
+        # print('y_validation ', '\n', y_validation)
         # [1:, :]表示第1行开始的保留，第0行去掉。因为第0行是初始化的全0行，并没有任何信息。
         ber_val, fer_val = calc_ber_fer(snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size*batches_for_val)
 

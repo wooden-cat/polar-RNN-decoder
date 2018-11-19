@@ -18,7 +18,7 @@ from keras import backend as K
 
 import datetime
 from shutil import copyfile
-import matplotlib.pyplot as pltf
+import matplotlib.pyplot as plt
 import sys
 import math   # 支持一些数学函数，以及特定的数学变量
 
@@ -27,20 +27,25 @@ code_n = 16   # 总的码长，可以看出来码率0.5
 code_rate = 1.0*code_k/code_n   # 算码率，有一个浮点数，最后结果就是浮点数了
 word_seed = 786000
 noise_seed = 345000
+
+# 训练信噪比
 start_snr = 6
 stop_snr = 6
-snr = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # np.arange()函数返回一个有终点和起点的固定步长的排列
 scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
+# 测试信噪比序列
+validation_start_snr = 6
+validation_stop_snr = 6
+validation_snr = np.arange(validation_start_snr, validation_stop_snr+1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
+batch_size_validation = 16  # 用于验证的码字有这么多一组
 # ########### Neural network config####################
 # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
-epochnum = 256   # 懵逼，到底是干嘛的？这个数字随便改，代码一样可以运行呀
+epochnum = 256   # 每次训练这么多组code_n bit的码字，必须为2**code_k
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
-batch_size_validation = 16  # 用于验证的码字有这么多一组
-batch_in_epoch = 10000    # 每训练这么多次有一波计算误码率的操作
+batch_in_epoch = 500    # 每训练这么多次有一波计算误码率的操作
 batches_for_val = 10     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 1000000000  # 取名有些混乱，这个是训练的次数
+num_of_batch = 50000  # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
@@ -55,7 +60,7 @@ random = np.random.RandomState(noise_seed)
 def bitrevorder(x):
     m = np.amax(x)  # 输入的数组里最大的数
     n = np.ceil(np.log2(m)).astype(int)  # 这个最大的数用二进制表示有n位
-    for i in range(0,len(x)):  # i从0到len(x),这个序列有i位，都要反转
+    for i in range(0, len(x)):  # i从0到len(x),这个序列有i位，都要反转
         x[i] = int('{:0{n}b}'.format(x[i],n=n)[::-1],2)  # int将字符串转为整形，这里是转为2进制整形。[::-1]序列倒序输出
     return x                          # str.format 把format里的东西放在str对应的位置，例如："Hello, {0} and {1}!".format("John", "Mary")
 
@@ -161,14 +166,14 @@ def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word
     return X, Y
 
 
-def create_mix_epoch_validation(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
+def create_mix_epoch_validation(code_k, code_n, numOfWordSim, validation_snr, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
     X = np.zeros([1, code_n], dtype=np.float32)
     Y = np.zeros([1, code_k], dtype=np.int64)
 
     x = np.zeros([numOfWordSim, code_n], dtype=np.int64)  # numOfWordSim这个玩意代入的参数是batch_size=120
     u = np.zeros([numOfWordSim, code_n], dtype=np.int64)
     d = np.zeros([numOfWordSim, code_k], dtype=np.int64)
-    for sf_i in scaling_factor:
+    for sf_i in validation_snr:
         A = polar_design_awgn(code_n, code_k, sf_i)  # A是bool型的玩意，来判断这个信道是不是合适传输的
         # print("A是这个东西", A)
         # #### 在这里加入循环！！！！！！！！！！！！！！
@@ -228,6 +233,7 @@ with tf.name_scope('inputs'):
     ys = tf.placeholder(tf.float32, shape=[batch_size, code_k], name='y_input')   # ys是最初未编码的0,1信息
     keep_prob = tf.placeholder(tf.float32)  # 占位符，相当于定义了函数参数，但是还不赋值，等到要用了再赋值
 '''
+
 # keras模型定义网络
 model = Sequential()
 model.add(Dense(128, activation='relu', use_bias=True, input_dim=16))
@@ -242,29 +248,36 @@ model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译�
 optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
 model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
 print(model.summary())   # 打印输出检查一下网络
+
+
 # #################################  Train  ##################################
+
 # 开始训练与测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
 
     # training
     training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor, is_zeros_word = train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
-    # print(training_labels.shape)
-    # print(training_data.shape)
-    # training_data = tf.reshape(training_data, (-1, 16, 1))
-    # training_labels = tf.reshape(training_labels, (-1, 8, 1))
-    # print(training_labels.shape)
-    # print(training_data.shape)
+
+    '''
+    # 调换顺序
+    # 但是我担心这个调换过于频繁，影响运算速度
+    arr = np.arange(epochnum)  # K是信息位的长度，把所有可能出现序列的序号都列出
+    np.random.shuffle(arr)  # 只对多维矩阵的第一维做打乱处理，改变排列顺序
+    training_data = training_data[arr]  # 相当于按照同样的规律把training_data和training_labels按照行调换了顺序
+    training_labels = training_labels[arr]
+    '''
     cost = model.train_on_batch(training_data, training_labels)   # 感觉这句有问题，或许改成fit会更好？ 输入的数据就是一组batch，这一组batch一起更新一次参数
 
     # validation
     if i % batch_in_epoch == 0:  # batch_in_epoch=400
+
         print('Finish Epoch - ', i/batch_in_epoch)
         print('训练模型的cost值为：', cost)
         y_validation = np.zeros([1,code_k], dtype=np.float32)
         y_validation_pred = np.zeros([1,code_k], dtype=np.float32)
 
-        for k_sf in scaling_factor:   # 测试四个信噪比
-            for j in range(batches_for_val):  # 为了让最终测试的误码率更可靠，计算batches_for_val组数据。最后算平均误码率。
+        for k_sf in validation_snr:   # 测试多个信噪比
+            for j in range(batches_for_val):  # 为了让最终测试的误码率更可靠，每个信噪比下计算batches_for_val组数据。最后算平均误码率以及误帧率。
 
                 validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
                 # print(validation_data.shape)
@@ -279,9 +292,39 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         # print('y_validation.shape', y_validation.shape)
         # print('y_validation_pred.shape', y_validation_pred.shape)
         # y_validation_pred = 1.0 / (1.0 + np.exp(-1.0 * y_validation_pred))   # 用sigmoid函数把输出量化到0~1之间
-        ber_val, fer_val = calc_ber_fer(snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size_validation*batches_for_val)
+        ber_val, fer_val = calc_ber_fer(validation_snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size_validation*batches_for_val)
 
         # print & write to file
-        print('SNR[dB] validation - ', snr)
+        print('SNR[dB] validation - ', validation_snr)
         print('BER validation - ', ber_val)
         print('FER validation - ', fer_val)  # FER frame error rates 误帧率
+
+
+# 在整个for循环结束，完成全部训练之后：才开始进行画图和存储训练网络这些后续工作
+
+# 全部训练完存储模型
+model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
+model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
+
+# 画图
+# 不仅画当前的神经网路，还要画几个对比函数都是事先保存的误码率
+# 都是从别人代码抄的二手误码率，未必可靠
+'''
+# ML = [0.018563,    0.0071536,    0.0021272,   0.00037756,    4.625e-05]
+BP = [0.232650402652771,  0.190316205533597,    0.177832650018636,   0.164884291725105,    0.142405545399147,
+      0.128362117780294]
+
+plt.plot(validation_snr, BP, '-r')   # BP和DNN的误码率是保存后直接打印画图
+legend = []
+plt.plot(validation_snr, ber_val)   # 只有RNN的误码率是现场计算的
+legend.append('BP')
+legend.append('DNN')
+# legend.append('RNN')
+plt.legend(legend, loc='best')
+plt.yscale('log')
+plt.xlabel('$GSNR$')
+plt.ylabel('BER')
+plt.grid(True)
+plt.show()
+'''
+
