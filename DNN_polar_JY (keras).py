@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-改成DNN的网络，也还是keras
-
+keras配置网络
+通过修改nn_set变量，选择不同的网络进行训练
+训练的结果分别存在不同txt文件
+by woodencat
 """
 
 from __future__ import print_function, division
@@ -59,6 +61,12 @@ wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed
 random = np.random.RandomState(noise_seed)
 
 
+# 设置网络
+nn_set = 'LSTM'
+print('当前配置的神经网络是： ', nn_set)
+
+
+# 定义各种小函数
 def bitrevorder(x):
     m = np.amax(x)  # 输入的数组里最大的数
     n = np.ceil(np.log2(m)).astype(int)  # 这个最大的数用二进制表示有n位
@@ -229,6 +237,7 @@ def errors(y_true, y_pred):  # 增加了round函数，有点像误码率了
 # def errors(y_true, y_pred):
 #   return 1.0*tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=y_true,logits=-y_pred))
 
+
 '''
 with tf.name_scope('inputs'):
     xs = tf.placeholder(tf.float32, shape=[batch_size, code_n], name='x_input')   # xs是编码加噪声后接收端处理过的对数似然信息
@@ -237,20 +246,34 @@ with tf.name_scope('inputs'):
 '''
 
 # keras模型定义网络
-f = open('BER_DNN.txt', 'w')  # 开个文件，记录测试的误码率
 
-model = Sequential()
-model.add(Dense(128, activation='relu', use_bias=True, input_dim=16))
-model.add(BatchNormalization())  # 每层的输入要做标准化
-model.add(Dense(64, activation='relu', use_bias=True))
-model.add(BatchNormalization())
-model.add(Dense(32, activation='relu', use_bias=True))
-model.add(BatchNormalization())
-model.add(Dense(16, activation='relu', use_bias=True))
-model.add(BatchNormalization())
-model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译模型
-optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
-model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
+if nn_set == 'DNN':
+    f = open('BER_DNN.txt', 'w')  # 开个文件，记录测试的误码率
+
+    model = Sequential()
+    model.add(Dense(128, activation='relu', use_bias=True, input_dim=16))
+    model.add(BatchNormalization())  # 每层的输入要做标准化
+    model.add(Dense(64, activation='relu', use_bias=True))
+    model.add(BatchNormalization())
+    model.add(Dense(32, activation='relu', use_bias=True))
+    model.add(BatchNormalization())
+    model.add(Dense(16, activation='relu', use_bias=True))
+    model.add(BatchNormalization())
+    model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译模型
+    optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
+    model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
+
+elif nn_set == 'LSTM':
+    f = open('LSTM_DNN.txt', 'w')  # 开个文件，记录测试的误码率
+
+    model = Sequential()
+    model.add(Bidirectional(LSTM(HIDDEN_SIZE, return_sequences=True, recurrent_dropout=0.5), input_shape=(None, 1)))
+    model.add(BatchNormalization())  # 每层的输入要做标准化
+    model.add(Bidirectional(LSTM(HIDDEN_SIZE, recurrent_dropout=0.5, )))
+    model.add(BatchNormalization())
+    model.add(Dense(code_k, activation='sigmoid'))  # 模型搭建完用compile来编译模型
+    optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
+    model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
 
 print('网络参数配置为')
 print(model.summary())   # 打印输出检查一下网络
@@ -271,7 +294,8 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
 
     # training
     training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor, is_zeros_word = train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
-
+    if nn_set == 'LSTM':
+        training_data = tf.reshape(training_data, (-1, 16, 1))
     '''
     # 调换顺序
     # 但是我担心这个调换过于频繁，影响运算速度
@@ -294,6 +318,9 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
             for j in range(batches_for_val):  # 为了让最终测试的误码率更可靠，每个信噪比下计算batches_for_val组数据。最后算平均误码率以及误帧率。
 
                 validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
+                if nn_set == 'LSTM':
+                    validation_data = tf.reshape(validation_data, (-1, 16, 1))
+
                 # print(validation_data.shape)
                 # validation_data = tf.reshape(validation_data, (-1, 16, 1))
                 # print(validation_data.shape)
@@ -316,7 +343,6 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         print('FER validation - ', fer_val)  # FER frame error rates 误帧率
         '''
 
-
         # 把每次误码率写入文件
         print('训练次数：', i, '测试误码率: ', ber_val, '误帧率: ', fer_val, '\n', file=f)
 
@@ -324,14 +350,19 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
 # 记录训练结束时间
 end_time = time.time()
 print('DNN模型训练次数 ', num_of_batch, '总共花费时间 ', str((end_time-start_time)/60), ' 分钟 ', file=f)
-print('\n 训练后的网络保存在 DNN_model_JY.h5 \n 训练后的参数保留在 DNN_model_weights_JY.h5')
 f.close
 
-# 在整个for循环结束，完成全部训练之后：才开始进行画图和存储训练网络这些后续工作
+##############################################################################################
+#  在整个for循环结束，完成全部训练之后：才开始进行画图和存储训练网络这些后续工作
+##############################################################################################
 
 # 全部训练完存储模型
-model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
-model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
+if nn_set == 'DNN':
+    model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
+    model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
+elif nn_set == 'LSTM':
+    model.save('LSTM_model_JY.h5')  # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
+    model.save_weights('LSTM_model_weights_JY.h5')  # 只保留权重参数
 
 
 # 画图 训练次数影响误码率

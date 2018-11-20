@@ -3,7 +3,7 @@
 训练数据是固定码长下全部可能码字都进行训练
 测试时随机产生码子进行测试
 目前的毛病就是训练速度太慢了一些
-训练几个小时，最终0.03误码率左右
+训练多个小时，最终0.02误码率左右
 """
 
 from __future__ import print_function, division
@@ -43,7 +43,7 @@ batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输�
 batch_size_validation = 16
 batch_in_epoch = 100    # 每训练400次有一波操作
 batches_for_val = 5     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 80000   # 取名有些混乱，这个是训练的次数
+num_of_batch = 5000    # 总共的训练的次数，训练5000次需要24小时左右
 LEARNING_RATE = 0.0003  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
@@ -241,6 +241,8 @@ model.add(Dense(code_k, activation='sigmoid'))  # 模型搭建完用compile来�
 optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
 model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
 print(model.summary())   # 打印输出检查一下网络
+
+
 # #################################  Train  ##################################
 # 开始训练与测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
