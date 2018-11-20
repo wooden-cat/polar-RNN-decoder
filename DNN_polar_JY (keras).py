@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 改成DNN的网络，也还是keras
+
 """
 
 from __future__ import print_function, division
@@ -15,13 +16,14 @@ from keras.optimizers import RMSprop, Adam
 from keras.layers import SimpleRNN,LSTM, GRU, Activation
 from keras.layers.wrappers import  Bidirectional
 from keras import backend as K
+import time
 
-import datetime
 from shutil import copyfile
 import matplotlib.pyplot as plt
 import sys
 import math   # 支持一些数学函数，以及特定的数学变量
 
+# 极化码编码参数
 code_k = 8     # 信息位码长
 code_n = 16   # 总的码长，可以看出来码率0.5
 code_rate = 1.0*code_k/code_n   # 算码率，有一个浮点数，最后结果就是浮点数了
@@ -43,9 +45,9 @@ batch_size_validation = 16  # 用于验证的码字有这么多一组
 epochnum = 256   # 每次训练这么多组code_n bit的码字，必须为2**code_k
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
-batch_in_epoch = 500    # 每训练这么多次有一波计算误码率的操作
+batch_in_epoch = 100    # 每训练这么多次有一波计算误码率的操作
 batches_for_val = 10     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 50000  # 取名有些混乱，这个是训练的次数
+num_of_batch = 10000  # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
@@ -235,6 +237,8 @@ with tf.name_scope('inputs'):
 '''
 
 # keras模型定义网络
+f = open('BER_DNN.txt', 'w')  # 开个文件，记录测试的误码率
+
 model = Sequential()
 model.add(Dense(128, activation='relu', use_bias=True, input_dim=16))
 model.add(BatchNormalization())  # 每层的输入要做标准化
@@ -247,10 +251,20 @@ model.add(BatchNormalization())
 model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译模型
 optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
 model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
+
+print('网络参数配置为')
 print(model.summary())   # 打印输出检查一下网络
 
-
 # #################################  Train  ##################################
+
+# 为训练做准备
+start_time = time.time()  # 记录训练开始时间
+validation_numbers = round(num_of_batch/batch_in_epoch)
+BER_all = np.zeros([1, validation_numbers], dtype=np.float32)
+validation_numbers = np.arange(validation_numbers).reshape(1, -1)  # 变成向量
+# print(BER_all.shape)
+# print(validation_numbers.shape)
+
 
 # 开始训练与测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
@@ -271,8 +285,8 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
     # validation
     if i % batch_in_epoch == 0:  # batch_in_epoch=400
 
-        print('Finish Epoch - ', i/batch_in_epoch)
-        print('训练模型的cost值为：', cost)
+        print('----------------------------Finish Epoch - ', i/batch_in_epoch, '-----------------------------------')
+        # print('训练模型的cost值为：', cost)
         y_validation = np.zeros([1,code_k], dtype=np.float32)
         y_validation_pred = np.zeros([1,code_k], dtype=np.float32)
 
@@ -293,12 +307,25 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         # print('y_validation_pred.shape', y_validation_pred.shape)
         # y_validation_pred = 1.0 / (1.0 + np.exp(-1.0 * y_validation_pred))   # 用sigmoid函数把输出量化到0~1之间
         ber_val, fer_val = calc_ber_fer(validation_snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size_validation*batches_for_val)
+        BER_all[0, int(i/batch_in_epoch)] = ber_val
 
+        '''
         # print & write to file
         print('SNR[dB] validation - ', validation_snr)
         print('BER validation - ', ber_val)
         print('FER validation - ', fer_val)  # FER frame error rates 误帧率
+        '''
 
+
+        # 把每次误码率写入文件
+        print('训练次数：', i, '测试误码率: ', ber_val, '误帧率: ', fer_val, '\n', file=f)
+
+
+# 记录训练结束时间
+end_time = time.time()
+print('DNN模型训练次数 ', num_of_batch, '总共花费时间 ', str((end_time-start_time)/60), ' 分钟 ', file=f)
+print('\n 训练后的网络保存在 DNN_model_JY.h5 \n 训练后的参数保留在 DNN_model_weights_JY.h5')
+f.close
 
 # 在整个for循环结束，完成全部训练之后：才开始进行画图和存储训练网络这些后续工作
 
@@ -306,7 +333,20 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
 model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
 model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
 
-# 画图
+
+# 画图 训练次数影响误码率
+plt.plot(validation_numbers, BER_all, 'ro')
+plt.grid(True)
+legend = []
+plt.legend(legend, loc='best')  # 图位置
+# plt.axis('tight')  # 不知道是啥
+# 图的坐标轴不支持中文显示！！！！蛋疼
+plt.xlabel('epoch')
+plt.ylabel('BER')
+plt.title('BER of train set with epoch increase')
+plt.show()
+
+# 画图 不同信噪比下误码率
 # 不仅画当前的神经网路，还要画几个对比函数都是事先保存的误码率
 # 都是从别人代码抄的二手误码率，未必可靠
 '''
@@ -327,4 +367,5 @@ plt.ylabel('BER')
 plt.grid(True)
 plt.show()
 '''
+
 
