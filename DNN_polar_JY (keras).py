@@ -49,7 +49,7 @@ batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
 batch_in_epoch = 100    # 每训练这么多次有一波计算误码率的操作
 batches_for_val = 10     # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 10000  # 取名有些混乱，这个是训练的次数
+num_of_batch = 5000   # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
@@ -61,10 +61,14 @@ wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed
 random = np.random.RandomState(noise_seed)
 
 
-# 设置网络
+# 手动注释代码设置网络
+# nn_set = 'DNN'
+# f = open('BER_DNN.txt', 'w')  # 开个文件，记录测试的误码率
 nn_set = 'LSTM'
-print('当前配置的神经网络是： ', nn_set)
+f = open('BER_LSTM.txt', 'w')  # 开个文件，记录测试的误码率
 
+print('当前配置的神经网络是： ', nn_set)
+# #######################################################
 
 # 定义各种小函数
 def bitrevorder(x):
@@ -248,7 +252,6 @@ with tf.name_scope('inputs'):
 # keras模型定义网络
 
 if nn_set == 'DNN':
-    f = open('BER_DNN.txt', 'w')  # 开个文件，记录测试的误码率
 
     model = Sequential()
     model.add(Dense(128, activation='relu', use_bias=True, input_dim=16))
@@ -264,7 +267,6 @@ if nn_set == 'DNN':
     model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
 
 elif nn_set == 'LSTM':
-    f = open('LSTM_DNN.txt', 'w')  # 开个文件，记录测试的误码率
 
     model = Sequential()
     model.add(Bidirectional(LSTM(HIDDEN_SIZE, return_sequences=True, recurrent_dropout=0.5), input_shape=(None, 1)))
@@ -334,7 +336,8 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         # print('y_validation_pred.shape', y_validation_pred.shape)
         # y_validation_pred = 1.0 / (1.0 + np.exp(-1.0 * y_validation_pred))   # 用sigmoid函数把输出量化到0~1之间
         ber_val, fer_val = calc_ber_fer(validation_snr, y_validation_pred[1:, :], y_validation[1:, :], batch_size_validation*batches_for_val)
-        BER_all[0, int(i/batch_in_epoch)] = ber_val
+        epoch_turns = int(i/batch_in_epoch)
+        BER_all[0, epoch_turns] = ber_val
 
         '''
         # print & write to file
@@ -344,7 +347,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         '''
 
         # 把每次误码率写入文件
-        print('训练次数：', i, '测试误码率: ', ber_val, '误帧率: ', fer_val, '\n', file=f)
+        print('epoch次数： ', epoch_turns, '训练次数：', i, '测试误码率: ', ber_val, '误帧率: ', fer_val, '\n', file=f)
 
 
 # 记录训练结束时间
@@ -356,13 +359,15 @@ f.close
 #  在整个for循环结束，完成全部训练之后：才开始进行画图和存储训练网络这些后续工作
 ##############################################################################################
 
-# 全部训练完存储模型
+'''
+# #############################################全部训练完存储模型
 if nn_set == 'DNN':
-    model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
-    model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
+     model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
+     model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
 elif nn_set == 'LSTM':
     model.save('LSTM_model_JY.h5')  # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
     model.save_weights('LSTM_model_weights_JY.h5')  # 只保留权重参数
+'''
 
 
 # 画图 训练次数影响误码率
