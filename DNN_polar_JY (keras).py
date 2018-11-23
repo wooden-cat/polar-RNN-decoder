@@ -16,7 +16,7 @@ from keras.models import Sequential, Model
 from keras.layers.core import Dense, Lambda
 from keras.optimizers import RMSprop, Adam
 from keras.layers import SimpleRNN,LSTM, GRU, Activation
-from keras.layers.wrappers import  Bidirectional
+from keras.layers.wrappers import Bidirectional
 from keras import backend as K
 import time
 
@@ -25,6 +25,13 @@ import matplotlib.pyplot as plt
 import sys
 import math   # 支持一些数学函数，以及特定的数学变量
 
+
+# 不加这个会报错，提醒我电脑CPU太差了，不能用这个破CPU运行tensorflow....(╬￣皿￣)=○.....(╬￣皿￣)=○
+# import os
+# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 这样报错只出现warning和error，设置为1就什么信息都显示
+
+
+# ################################################################
 # 极化码编码参数
 code_k = 8     # 信息位码长
 code_n = 16   # 总的码长，可以看出来码率0.5
@@ -44,7 +51,7 @@ validation_snr = np.arange(validation_start_snr, validation_stop_snr+1, 1, dtype
 batch_size_validation = 16  # 用于验证的码字有这么多一组
 # ########### Neural network config####################
 # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
-epochnum = 256   # 每次训练这么多组code_n bit的码字，必须为2**code_k
+epochnum = 2**code_k   # 每次训练这么多组code_n bit的码字，必须为2**code_k
 batch = 1
 batch_size = epochnum*batch   # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
 batch_in_epoch = 100    # 每训练这么多次有一波计算误码率的操作
@@ -62,10 +69,13 @@ random = np.random.RandomState(noise_seed)
 
 
 # 手动注释代码设置网络
-# nn_set = 'DNN'
+nn_set = 'DNN'
 # f = open('BER_DNN.txt', 'w')  # 开个文件，记录测试的误码率
-nn_set = 'LSTM'
-f = open('BER_LSTM.txt', 'w')  # 开个文件，记录测试的误码率
+# f = open('32bitBER_DNN.txt', 'w')  # 开个文件，记录测试的误码率
+# nn_set = 'LSTM'
+# f = open('BER_LSTM.txt', 'w')  # 开个文件，记录测试的误码率
+
+f = open('text_DNN.txt', 'w')   # 随便开一个文档，乱生成的东西都写进去，就是个草稿本
 
 print('当前配置的神经网络是： ', nn_set)
 # #######################################################
@@ -250,19 +260,20 @@ with tf.name_scope('inputs'):
 '''
 
 # keras模型定义网络
-
+# 16bit {128,64,32,16,8}
+# 32bit {256,128,64,32,16}
 if nn_set == 'DNN':
 
     model = Sequential()
-    model.add(Dense(128, activation='relu', use_bias=True, input_dim=16))
+    model.add(Dense(256, activation='relu', use_bias=True, input_dim=code_n))
     model.add(BatchNormalization())  # 每层的输入要做标准化
+    model.add(Dense(128, activation='relu', use_bias=True))
+    model.add(BatchNormalization())
     model.add(Dense(64, activation='relu', use_bias=True))
     model.add(BatchNormalization())
     model.add(Dense(32, activation='relu', use_bias=True))
     model.add(BatchNormalization())
-    model.add(Dense(16, activation='relu', use_bias=True))
-    model.add(BatchNormalization())
-    model.add(Dense(8, activation='sigmoid'))  # 模型搭建完用compile来编译模型
+    model.add(Dense(code_k, activation='sigmoid'))  # 模型搭建完用compile来编译模型
     optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
     model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=[errors])  # 这个error函数到底怎么定义还需要进一步考虑
 
@@ -297,7 +308,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
     # training
     training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor, is_zeros_word = train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
     if nn_set == 'LSTM':
-        training_data = tf.reshape(training_data, (-1, 16, 1))
+        training_data = tf.reshape(training_data, (-1, code_n, 1))
     '''
     # 调换顺序
     # 但是我担心这个调换过于频繁，影响运算速度
@@ -321,7 +332,7 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
 
                 validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation, [k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
                 if nn_set == 'LSTM':
-                    validation_data = tf.reshape(validation_data, (-1, 16, 1))
+                    validation_data = tf.reshape(validation_data, (-1, code_n, 1))
 
                 # print(validation_data.shape)
                 # validation_data = tf.reshape(validation_data, (-1, 16, 1))
@@ -362,13 +373,14 @@ f.close
 '''
 # #############################################全部训练完存储模型
 if nn_set == 'DNN':
-     model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
-     model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
+    # model.save('DNN_model_JY.h5')   # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
+    # model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
+    model.save('32bitDNN_model_JY.h5')  # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
+    model.save_weights('32bitDNN_model_weights_JY.h5')   # 只保留权重参数
 elif nn_set == 'LSTM':
     model.save('LSTM_model_JY.h5')  # 保存模型结构，权重参数，损失函数，优化器，，，所有可以自己配置的东西
     model.save_weights('LSTM_model_weights_JY.h5')  # 只保留权重参数
 '''
-
 
 # 画图 训练次数影响误码率
 plt.plot(validation_numbers, BER_all, 'ro')
