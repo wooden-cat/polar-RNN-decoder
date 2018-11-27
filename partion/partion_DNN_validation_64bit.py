@@ -1,3 +1,15 @@
+"""
+keras配置网络
+8bit输入，8bit输出，训练之后的网络存在固定的文件
+
+不再是一个极化码的译码器，而是一个随机码的对应+，=极化码结构的译码器
+
+训练的信噪比是4,5,6dB，而测试则是5dB的信噪比
+
+64bit码长，一共分成8个块
+
+by woodencat
+"""
 from __future__ import print_function, division
 
 import tensorflow as tf
@@ -25,27 +37,24 @@ import math  # 支持一些数学函数，以及特定的数学变量
 
 # ################################################################
 # 极化码编码参数
-code_k = 16 # 信息位码长
-code_n = 32  # 总的码长，可以看出来码率0.5
+code_k = 32 # 信息位码长
+code_n = 64  # 总的码长，可以看出来码率0.5
 code_rate = 1.0 * code_k / code_n  # 算码率，有一个浮点数，最后结果就是浮点数了
 size_nn = 8        # 每次分的小块的大小
 word_seed = 786000
 noise_seed = 345000
 
-# 训练信噪比
-start_snr = 6
-stop_snr = 6
-scaling_factor = np.arange(start_snr, stop_snr + 1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
 # 测试信噪比序列
-validation_start_snr = 6
-validation_stop_snr = 6
+validation_start_snr = 5
+validation_stop_snr = 5
 validation_snr = np.arange(validation_start_snr, validation_stop_snr + 1, 1,
                            dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 batch_size_validation = 1  # 用于验证的码字有这么多一组
-SNR_validation = 6
+SNR_validation = 5
 
-times_of_validation = 10    # 反复测试，以减少随机性
+times_of_validation = 50    # 反复测试，以减少随机性
+
 # ########### Neural network config####################
 # epoch：中文翻译为时期,即所有训练样本的一个正向传递和一个反向传递；一般情况下数据量太大，没法同时通过网络，所以将数据分为几个batch
 epochnum = 2 ** code_k  # 每次训练这么多组code_n bit的码字，必须为2**code_k
@@ -57,8 +66,7 @@ num_of_batch = 5000  # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
-load_weights = False
-is_training = True
+
 
 wordRandom = np.random.RandomState(word_seed)  # 伪随机数产生器，（seed）其中seed的值相同则产生的随机数相同
 random = np.random.RandomState(noise_seed)
@@ -277,7 +285,7 @@ for i in range(times_of_validation):
 '''
 A = polar_design_awgn_AA(code_n, code_k, SNR_validation)
 A = A.reshape(-1, size_nn)
-
+count = 0
 
 for i in range(times_of_validation):
     # 前期准备
@@ -287,12 +295,18 @@ for i in range(times_of_validation):
     y_llr1_matrix = y_llr.reshape(-1, size_nn)  # 一行16个做好分组
     # print(y_llr1_matrix)
     # print(np.rint(y_llr1_matrix))
-    partion_num = 4
+    part_num = int(code_n/size_nn)
 
     # 倒数第一块
     X[3, :] = model.predict((y_llr1_matrix[3, :]).reshape(-1, size_nn), steps=1) + 0.5
     for k in range(size_nn):
         X[3, k] = X[3, k] & A[3, k]
+
+    # ####################################################
+    # 插入一次的检查，只要有错就跳出。类似于CRC校验，但是懒得再写CRC的代码了
+    if np.abs(X[3, :] - (validation_X.reshape(-1, 8))[3, :]).sum() != 0:
+        continue
+
     X1_llr = polar_transform_iter(X[3, :])
     # print(X1_llr)
 
@@ -325,9 +339,12 @@ for i in range(times_of_validation):
     # 计算误码率
     # print(validation_X.shape)
     ber_test[i] = np.abs(X-validation_X).sum()/(validation_X.shape[0]*validation_X.shape[1])
+    if ber_test[i] > 0.08:
+        count = count + 1
+    print('单次误码率', ber_test[i])
     print(i, '次译码测试出错的码字矩阵')
     print((X-validation_X).reshape(-1, 8))
-    print(A)
+    # print(A)
 
     # print(y_llr1_matrix)
     # print((X > 0.5).reshape(-1, 8))
@@ -345,3 +362,4 @@ for i in range(times_of_validation):
     '''
 
 print('信息位和冻结位混合的误码率是', np.mean(ber_test))
+print('误码率超过0.08的个数', count)

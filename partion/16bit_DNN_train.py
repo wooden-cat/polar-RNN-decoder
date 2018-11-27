@@ -42,8 +42,8 @@ word_seed = 786000
 noise_seed = 345000
 
 # 训练信噪比
-start_snr = 4
-stop_snr = 6
+start_snr = 3
+stop_snr = 7
 scaling_factor = np.arange(start_snr, stop_snr + 1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
 # 测试信噪比序列
@@ -58,7 +58,7 @@ epochnum = 2 ** code_k   # 每次训练这么多组code_n bit的码字，必须�
 batch_size = epochnum * len(scaling_factor)  # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
 batch_in_epoch = 100  # 每训练这么多次有一波计算误码率的操作
 batches_for_val = 10  # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 5000  # 取名有些混乱，这个是训练的次数
+num_of_batch = 9000  # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
@@ -147,30 +147,27 @@ def polar_transform_iter(u):  # encoding
 
 
 # Data Generation
-def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
+def create_mix_epoch(code_k, code_n, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
     X = np.zeros([1, code_n], dtype=np.float32)
     Y = np.zeros([1, code_n], dtype=np.int64)
 
-    x = np.zeros([numOfWordSim, code_n], dtype=np.int64)  # numOfWordSim这个玩意代入的参数是batch_size=120
-    u = np.zeros([numOfWordSim, code_n], dtype=np.int64)
-    d = np.zeros([numOfWordSim, code_k], dtype=np.int64)
+    # code_k个信息位，所有出现的0,1组合一共有numofcode_n个
+    numofcode_n = 2 ** code_k
+    x = np.zeros([numofcode_n, code_n], dtype=np.int64)  # numOfWordSim这个玩意代入的参数是batch_size=120
+    d = np.zeros([numofcode_n, code_k], dtype=np.int64)
     for sf_i in scaling_factor:
         A = polar_design_awgn(code_n, code_k, sf_i)  # A是bool型的玩意，来判断这个信道是不是合适传输的
         # print("A是这个东西", A)
         # #### 在这里加入循环！！！！！！！！！！！！！！
         if is_zeros_word:  # 用全0数据训练
-            d = 0 * wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # max取值只能到2，不能到1
+            d = 0 * wordRandom.randint(0, 2, size=(numofcode_n, code_k))  # max取值只能到2，不能到1
         else:
             # 把d变成1，2,3,4,5然后转化为2进制，从而遍历所有的情况，看看是不是我的网络设置有毛病
-            for k in range(1, numOfWordSim):  # 在码长固定的情况下遍历所有的可能情况
+            for k in range(1, numofcode_n):  # 在码长固定的情况下遍历所有的可能情况
                 d[k] = inc_bin(d[k - 1])
-            # d = wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # 随机生成训练数据
-            print(d.shape)
-        # print(d)
-        # X[:,0]就是取所有行的第0个数据, X[:,1] 就是取所有行的第1个数据。
-        u[:, A] = d  # u = np.zeros([numOfWordSim, code_n],dtype=np.int64) ，没毛病，u就是120*64的维度，d是120*64的随机数，0,1的随机数，A是64的bool型
-        for i in range(0, numOfWordSim):
-            x[i] = polar_transform_iter(u[i])
+
+        for i in range(0, numofcode_n):
+            x[i] = polar_transform_iter(d[i])
 
         snr_lin = 10.0 ** (sf_i / 10.0)
         noise = np.sqrt(1.0 / (2.0 * snr_lin * code_rate))
@@ -179,11 +176,10 @@ def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word
         x_llr_i = (1 - X_p_i) / 2
         # x_llr_i = 2 * X_p_i / (noise ** 2)
         X = np.vstack((X, x_llr_i))  # x_llr_i是接收端用来译码的对数似然信息
-        Y = np.vstack((Y, u))  # u是单纯的原始码
+        Y = np.vstack((Y, d))  # u是单纯的原始码
 
     X = X[1:]  # X是编码加噪声后接收端处理过的对数似然信息
     Y = Y[1:]  # Y是最初未编码的0,1信息
-
     return X, Y
 
 
@@ -235,8 +231,8 @@ def calc_ber_fer(snr_db, Y_v_pred, Y_v, numOfWordSim):
         A = polar_design_awgn(code_n, code_k, snr_db[i])
         Y_v_pred_i = Y_v_pred[i*numOfWordSim:(i+1)*numOfWordSim,A]
         Y_v_i = Y_v[i*numOfWordSim:(i+1)*numOfWordSim,A]
-        ber_test[i] =  np.abs(((Y_v_pred_i > 0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
-        fer_test[i] = (np.abs(np.abs(((Y_v_pred_i > 0.5)-Y_v_i))).sum(axis=1)>0).sum()*1.0/Y_v_i.shape[0]  # .sum(axis=1)是把矩阵每一行的数都相加 .shape[0]即行数。0表示第一维行，1表示第二维列
+        ber_test[i] = np.abs(((Y_v_pred_i > 0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
+        fer_test[i] = (np.abs(np.abs(((Y_v_pred_i > 0.5)-Y_v_i))).sum(axis=1) > 0).sum()*1.0/Y_v_i.shape[0]  # .sum(axis=1)是把矩阵每一行的数都相加 .shape[0]即行数。0表示第一维行，1表示第二维列
     return ber_test, fer_test
 
 
@@ -257,11 +253,11 @@ def errors(y_true, y_pred):  # 增加了round函数，有点像误码率了
 # 32bit {256,128,64,32,16}
 
 model = Sequential()
-model.add(Dense(256, activation='relu', use_bias=True, input_dim=code_n))
+model.add(Dense(128, activation='relu', use_bias=True, input_dim=code_n))
 model.add(BatchNormalization())  # 每层的输入要做标准化
 model.add(Dense(128, activation='relu', use_bias=True))
 model.add(BatchNormalization())
-model.add(Dense(128, activation='relu', use_bias=True))
+model.add(Dense(64, activation='relu', use_bias=True))
 model.add(BatchNormalization())
 model.add(Dense(32, activation='relu', use_bias=True))
 model.add(BatchNormalization())
@@ -287,10 +283,9 @@ validation_numbers = np.arange(validation_numbers).reshape(1, -1)  # 变成向�
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
 
     # training
-    training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor,
-                                                      is_zeros_word=train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
+    training_data, training_labels = create_mix_epoch(code_k, code_n, scaling_factor, is_zeros_word=train_on_zero_word)  # 生成训练数据集，用全0的数据集做训练
 
-    cost = model.train_on_batch(training_data, training_labels)  # 感觉这句有问题，或许改成fit会更好？ 输入的数据就是一组batch，这一组batch一起更新一次参数
+    cost = model.train_on_batch(training_data, training_labels)  # 输入的数据就是一组batch，这一组全部算完后更新一次参数
 
     # validation
     if i % batch_in_epoch == 0:  # batch_in_epoch=400
