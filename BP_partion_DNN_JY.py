@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 by wooden_cat
-增加了画图控制语句
-让最终输出结果更加清晰直观
+BP分块训练，每个小块是8bit，其他部分就是常规的BP，到倒数第三层的时候变成DNN的神经网络。
+译码到还剩下4层的时候停止。
+码长暂定为128，有16个DNN小块。
 """
 
 from __future__ import print_function, division
@@ -20,8 +21,9 @@ import math   # 支持一些数学函数，以及特定的数学变量
 import time
 
 
-code_k = 32     # 信息位码长
-code_n = 64   # 总的码长，可以看出来码率0.5
+code_k = 64     # 信息位码长
+code_n = 128   # 总的码长，可以看出来码率0.5
+DNN_size = 8  # 定义分块神经网络小块的大小
 code_rate = 1.0*code_k/code_n   # 算码率，有一个浮点数，最后结果就是浮点数了
 n = np.log2(code_n).astype(int)  # BP网络的层数是log2码长
 dd = float("30")   # 迭代次数
@@ -29,8 +31,8 @@ word_seed = 786000
 noise_seed = 345000
 start_snr = 1
 stop_snr = 4
-snr = np.arange(start_snr,stop_snr+1,1,dtype=np.float32)  # np.arange()函数返回一个有终点和起点的固定步长的排列
-scaling_factor = np.arange(start_snr,stop_snr+1,1,dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
+snr = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # np.arange()函数返回一个有终点和起点的固定步长的排列
+scaling_factor = np.arange(start_snr, stop_snr+1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
 # ########### Neural network config####################
 
@@ -95,7 +97,11 @@ def polar_design_awgn(N, k, snr_dB):
 
     A = np.zeros(N, dtype=bool)
     A[idx] = True
-
+    A_matrix = A.reshape(-1, 8)
+    print('8个分为一组冻结位有多少个', A_matrix)
+    A_zeros = np.zeros([A_matrix.shape[0], A_matrix.shape[1]], dtype=np.float32)
+    A_count = (A_matrix - A_zeros).sum(axis=1)
+    print('每一行的信息位有多少个', A_count)
     return A
 
     
@@ -116,7 +122,7 @@ def polar_transform_iter(u): #encoding
 
 
 # 真想吐槽一下，这个代码可读性好差！取名混乱，结构也很乱！烦！！！困！！！！！！
-def create_mix_epoch(code_k,code_n,numOfWordSim,scaling_factor,is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
+def create_mix_epoch(code_k, code_n, numOfWordSim, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
     X = np.zeros([1,code_n], dtype=np.float32)
     Y = np.zeros([1,code_n], dtype=np.int64)
     
@@ -345,7 +351,7 @@ if load_weights:  # 加载权重，这是开始用训练好的网络去做测试
 for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_batch = 10000
 
     # training
-    training_data, training_labels = create_mix_epoch(code_k,code_n,epochnum,scaling_factor,is_zeros_word=train_on_zero_word) # 生成训练数据集，用全0的数据集做训练
+    training_data, training_labels = create_mix_epoch(code_k, code_n, epochnum, scaling_factor, is_zeros_word=train_on_zero_word) # 生成训练数据集，用全0的数据集做训练
     training_labels_for_mse = training_labels
     # 每运行一次更新一次fetch里的值 ; 反正就是在更新网络；没必要用fetch语句；y_output, loss没必要fetch输出
     # 首先占位符申请空间；使用的时候，通过占位符“喂（feed_dict）”给程序。feed_dict的作用是给使用placeholder创建出来的tensor赋值;运行之后用fetch把想要的值给取出来
