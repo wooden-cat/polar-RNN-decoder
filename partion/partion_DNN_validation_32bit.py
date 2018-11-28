@@ -4,7 +4,7 @@ keras配置网络
 
 不再是一个极化码的译码器，而是一个随机码的对应+，=极化码结构的译码器
 
-训练的信噪比是4,5,6dB，而测试则是5dB的信噪比
+训练的信噪比是3，4,5,6，7dB，而测试也是这一些的信噪比
 
 32bit分为4个块，对于最先译码得出的最后一个块，有CRC校验
 by woodencat
@@ -51,8 +51,6 @@ validation_stop_snr = 7
 batch_size_validation = 1  # 用于验证的码字有这么多一组
 times_of_validation = 10    # 反复测试，以减少随机性
 
-batch_in_epoch = 100  # 每训练这么多次有一波计算误码率的操作
-batches_for_val = 1  # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
 train_on_zero_word = False
 test_on_zero_word = False
 
@@ -159,34 +157,35 @@ def polar_transform_iter(u):  # encoding
     return x
 
 
-def create_mix_epoch_validation(code_k, code_n, numOfWordSim, validation_snr, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
+# 在一个固定信噪比下，产生numOfWordSim个码长为code_n的极化码
+def create_mix_epoch_validation(code_k, code_n, numOfWordSim, validation_snr, is_zeros_word):
     X = np.zeros([1, code_n], dtype=np.float32)
     Y = np.zeros([1, code_n], dtype=np.int64)
 
     x = np.zeros([numOfWordSim, code_n], dtype=np.int64)  # numOfWordSim这个玩意代入的参数是batch_size=120
     u = np.zeros([numOfWordSim, code_n], dtype=np.int64)
     d = np.zeros([numOfWordSim, code_k], dtype=np.int64)
-    for sf_i in validation_snr:
-        A = polar_design_awgn(code_n, code_k, sf_i)  # A是bool型的玩意，来判断这个信道是不是合适传输的
-        # print("A是这个东西", A)
-        # #### 在这里加入循环！！！！！！！！！！！！！！
-        if is_zeros_word:  # 用全0数据训练
-            d = 0 * wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # max取值只能到2，不能到1
-        else:
-            d = wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # 随机生成训练数据
 
-        u[:,A] = d
-        for i in range(0, numOfWordSim):
-            x[i] = polar_transform_iter(u[i])
+    A = polar_design_awgn(code_n, code_k, validation_snr)  # A是bool型的玩意，来判断这个信道是不是合适传输的
+    # print("A是这个东西", A)
+    # #### 在这里加入循环！！！！！！！！！！！！！！
+    if is_zeros_word:  # 用全0数据训练
+        d = 0 * wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # max取值只能到2，不能到1
+    else:
+        d = wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # 随机生成训练数据
 
-        snr_lin = 10.0 ** (sf_i / 10.0)
-        noise = np.sqrt(1.0 / (2.0 * snr_lin * code_rate))
-        X_p_i = random.normal(0.0, 1.0, x.shape) * noise + (1) * (1 - 2 * x)  # random.normal按照正态分布取随机数
-        # X_p_i = random.normal(0.0, 1.0, x.shape) * noise + x  # random.normal按照正态分布取随机数
-        x_llr_i = (1 - X_p_i) / 2
-        # x_llr_i = 2 * X_p_i / (noise ** 2)
-        X = np.vstack((X, x_llr_i))  # x_llr_i是接收端用来译码的对数似然信息
-        Y = np.vstack((Y, u))  # u是单纯的原始码
+    u[:,A] = d
+    for i in range(0, numOfWordSim):
+        x[i] = polar_transform_iter(u[i])
+
+    snr_lin = 10.0 ** (validation_snr / 10.0)
+    noise = np.sqrt(1.0 / (2.0 * snr_lin * code_rate))
+    X_p_i = random.normal(0.0, 1.0, x.shape) * noise + (1) * (1 - 2 * x)  # random.normal按照正态分布取随机数
+    # X_p_i = random.normal(0.0, 1.0, x.shape) * noise + x  # random.normal按照正态分布取随机数
+    x_llr_i = (1 - X_p_i) / 2
+    # x_llr_i = 2 * X_p_i / (noise ** 2)
+    X = np.vstack((X, x_llr_i))  # x_llr_i是接收端用来译码的对数似然信息
+    Y = np.vstack((Y, u))  # u是单纯的原始码
 
     X = X[1:]  # X是编码加噪声后接收端处理过的对数似然信息
     Y = Y[1:]  # Y是最初未编码的0,1信息
@@ -280,7 +279,8 @@ for validation_snr in range(validation_start_snr, validation_stop_snr + 1):
     A = A.reshape(-1, size_nn)
     count = 0  # 数数跳过去多少组code_n
     ber_test = np.zeros(times_of_validation, dtype=np.float32)
-    
+    count_skip = 0  # 数跳过的次数，连跳三次
+
     # 每个信噪比下，测试time_of_validation组code_n的数据，计算平均误码率以降低随机误差
     for i in range(times_of_validation):
         # 前期准备
@@ -297,10 +297,18 @@ for validation_snr in range(validation_start_snr, validation_stop_snr + 1):
         for k in range(size_nn):
             X[3, k] = X[3, k] & A[3, k]
 
-        # ####################################################
+        # ########################################################
+        '''
         # 插入一次的检查，只要有错就跳出。类似于CRC校验，但是懒得再写CRC的代码了
+        # 可以重发两次，第三次就不管对不对都发出去了
         if np.abs(X[3, :] - (validation_X.reshape(-1, 8))[3, :]).sum() != 0:
-            continue
+            count_skip = count_skip + 1
+            if count_skip != 3:
+                continue
+        else:
+            count_skip = 0   # 若没有译码错误，则直接置0，
+        '''
+        # ##########################################################
 
         X1_llr = polar_transform_iter(X[3, :])
         # print(X1_llr)
@@ -333,14 +341,15 @@ for validation_snr in range(validation_start_snr, validation_stop_snr + 1):
 
         # 计算误码率
         # print(validation_X.shape)
-        ber_test[i] = np.abs(X-validation_X).sum()/(validation_X.shape[0]*validation_X.shape[1])
+        ber_test[i] = np.abs(X-validation_X).sum()/code_k   # 对信息位算误码率
         if ber_test[i] == 0:
             count = count + 1
         print('单次误码率', ber_test[i])
         print(i, '次译码测试出错的码字矩阵')
         print((X-validation_X).reshape(-1, 8))
 
-    ber_differ_snr[validation_snr - validation_start_snr] = 2 * np.sum(ber_test)/(code_n - count)
+    # 不是简单取均值，减去count那些跳过没有计算的东西
+    ber_differ_snr[validation_snr - validation_start_snr] = np.sum(ber_test)/(times_of_validation - count)
     print(validation_snr, '信噪比下的平均误码率', ber_differ_snr[validation_snr - validation_start_snr])
 
 

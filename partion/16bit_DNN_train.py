@@ -4,6 +4,9 @@ keras配置网络
 8bit输入，8bit输出，训练之后的网络存在固定的文件
 
 不再是一个极化码的译码器，而是一个随机码的对应+，=极化码结构的译码器
+误码率的统计也变了
+测试数据的产生也变了
+和之前戴彬的版本已经没有任何相似之处了
 
 训练的信噪比是4,5,6dB，而测试则是5dB的信噪比
 by woodencat
@@ -47,10 +50,9 @@ stop_snr = 7
 scaling_factor = np.arange(start_snr, stop_snr + 1, 1, dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 
 # 测试信噪比序列
-validation_start_snr = 5
-validation_stop_snr = 5
-validation_snr = np.arange(validation_start_snr, validation_stop_snr + 1, 1,
-                           dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
+validation_start_snr = 3
+validation_stop_snr = 7
+validation_snr = np.arange(validation_start_snr, validation_stop_snr + 1, 1,dtype=np.float32)  # arrang返回一个数组，也就是始末信噪比的数组
 batch_size_validation = 16  # 用于验证的码字有这么多一组
 # ########### Neural network config####################
 
@@ -58,7 +60,7 @@ epochnum = 2 ** code_k   # 每次训练这么多组code_n bit的码字，必须�
 batch_size = epochnum * len(scaling_factor)  # batch_size是指将多个数据同时作为输入  ！！！非常重要的一个变量！！
 batch_in_epoch = 100  # 每训练这么多次有一波计算误码率的操作
 batches_for_val = 10  # 貌似使用这个来计算误帧率,要有多个帧才能计算误帧率
-num_of_batch = 9000  # 取名有些混乱，这个是训练的次数
+num_of_batch = 500  # 取名有些混乱，这个是训练的次数
 LEARNING_RATE = 0.0001  # 学习率 不设置的话函数自动默认是0.001
 train_on_zero_word = False
 test_on_zero_word = False
@@ -183,6 +185,7 @@ def create_mix_epoch(code_k, code_n, scaling_factor, is_zeros_word):  # 把之�
     return X, Y
 
 
+# 在一个固定信噪比下，产生numOfWordSim个码长为code_n的极化码
 def create_mix_epoch_validation(code_k, code_n, numOfWordSim, validation_snr, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
     X = np.zeros([1, code_n], dtype=np.float32)
     Y = np.zeros([1, code_n], dtype=np.int64)
@@ -190,36 +193,29 @@ def create_mix_epoch_validation(code_k, code_n, numOfWordSim, validation_snr, is
     x = np.zeros([numOfWordSim, code_n], dtype=np.int64)  # numOfWordSim这个玩意代入的参数是batch_size=120
     u = np.zeros([numOfWordSim, code_n], dtype=np.int64)
     d = np.zeros([numOfWordSim, code_k], dtype=np.int64)
-    for sf_i in validation_snr:
-        A = polar_design_awgn(code_n, code_k, sf_i)  # A是bool型的玩意，来判断这个信道是不是合适传输的
-        # print("A是这个东西", A)
-        # #### 在这里加入循环！！！！！！！！！！！！！！
-        if is_zeros_word:  # 用全0数据训练
-            d = 0 * wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # max取值只能到2，不能到1
-        else:
-            # 把d变成1，2,3,4,5然后转化为2进制，从而遍历所有的情况，看看是不是我的网络设置有毛病
-            # for k in range(1, numOfWordSim):  # 在码长固定的情况下遍历所有的可能情况
-            #   d[k] = inc_bin(d[k - 1])
-            d = wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # 随机生成训练数据
+    A = polar_design_awgn(code_n, code_k, validation_snr)  # A是bool型的玩意，来判断这个信道是不是合适传输的
+    # print("A是这个东西", A)
+    # #### 在这里加入循环！！！！！！！！！！！！！！
+    if is_zeros_word:  # 用全0数据训练
+        d = 0 * wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # max取值只能到2，不能到1
+    else:
+        d = wordRandom.randint(0, 2, size=(numOfWordSim, code_k))  # 随机生成训练数据
 
-        # print(d)
-        # X[:,0]就是取所有行的第0个数据, X[:,1] 就是取所有行的第1个数据。
-        u[:,A] = d  # u = np.zeros([numOfWordSim, code_n],dtype=np.int64) ，没毛病，u就是120*64的维度，d是120*64的随机数，0,1的随机数，A是64的bool型
-        for i in range(0, numOfWordSim):
-            x[i] = polar_transform_iter(u[i])
+    u[:, A] = d
+    for i in range(0, numOfWordSim):
+        x[i] = polar_transform_iter(u[i])
 
-        snr_lin = 10.0 ** (sf_i / 10.0)
-        noise = np.sqrt(1.0 / (2.0 * snr_lin * code_rate))
-        X_p_i = random.normal(0.0, 1.0, x.shape) * noise + (1) * (1 - 2 * x)  # random.normal按照正态分布取随机数
-        # X_p_i = random.normal(0.0, 1.0, x.shape) * noise + x  # random.normal按照正态分布取随机数
-        x_llr_i = (1 - X_p_i) / 2
-        # x_llr_i = 2 * X_p_i / (noise ** 2)
-        X = np.vstack((X, x_llr_i))  # x_llr_i是接收端用来译码的对数似然信息
-        Y = np.vstack((Y, u))  # u是单纯的原始码
+    snr_lin = 10.0 ** (validation_snr / 10.0)
+    noise = np.sqrt(1.0 / (2.0 * snr_lin * code_rate))
+    X_p_i = random.normal(0.0, 1.0, x.shape) * noise + (1) * (1 - 2 * x)  # random.normal按照正态分布取随机数
+    # X_p_i = random.normal(0.0, 1.0, x.shape) * noise + x  # random.normal按照正态分布取随机数
+    x_llr_i = (1 - X_p_i) / 2
+    # x_llr_i = 2 * X_p_i / (noise ** 2)
+    X = np.vstack((X, x_llr_i))  # x_llr_i是接收端用来译码的对数似然信息
+    Y = np.vstack((Y, u))  # u是单纯的原始码
 
     X = X[1:]  # X是编码加噪声后接收端处理过的对数似然信息
     Y = Y[1:]  # Y是最初未编码的0,1信息
-
     return X, Y
 
 
@@ -246,20 +242,17 @@ def errors(y_true, y_pred):  # 增加了round函数，有点像误码率了
 #   return 1.0*tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=y_true,logits=-y_pred))
 
 
-
-
 # keras模型定义网络
 # 16bit {128,64,32,16,8}
 # 32bit {256,128,64,32,16}
-
 model = Sequential()
-model.add(Dense(128, activation='relu', use_bias=True, input_dim=code_n))
+model.add(Dense(256, activation='relu', use_bias=True, input_dim=code_n))
 model.add(BatchNormalization())  # 每层的输入要做标准化
+model.add(Dense(256, activation='relu', use_bias=True))
+model.add(BatchNormalization())
 model.add(Dense(128, activation='relu', use_bias=True))
 model.add(BatchNormalization())
 model.add(Dense(64, activation='relu', use_bias=True))
-model.add(BatchNormalization())
-model.add(Dense(32, activation='relu', use_bias=True))
 model.add(BatchNormalization())
 model.add(Dense(code_n, activation='sigmoid'))  # 模型搭建完用compile来编译模型
 optimizer = keras.optimizers.adam(lr=LEARNING_RATE, clipnorm=1.0)  # 如果不设置的话 默认值为 lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0.
@@ -296,27 +289,22 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         y_validation_pred = np.zeros([1, code_n], dtype=np.float32)
 
         for k_sf in validation_snr:  # 测试多个信噪比
-            for j in range(batches_for_val):  # 为了让最终测试的误码率更可靠，每个信噪比下计算batches_for_val组数据。最后算平均误码率以及误帧率。
+            # 测试时格外产生一些数据；用非0的数据集做测试
+            validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation, k_sf, is_zeros_word=test_on_zero_word)
+            ber_val, fer_val = calc_ber_fer(k_sf, y_validation_pred, validation_labels, batch_size_validation * batches_for_val)
+            epoch_turns = int(i / batch_in_epoch)
+            BER_all[0, epoch_turns] = ber_val
 
-                validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation,[k_sf], is_zeros_word=test_on_zero_word)  # 测试时格外产生一些数据；用非0的数据集做测试
-                y_validation_pred_j = model.predict(validation_data, steps=1)  # 这里的输出是个范围很大的数，不是局限在0~1之间的
+            # 每个信噪比下 误码率与训练次数的关系分别打印，画图，保存到txt
+            plt.plot(validation_numbers, BER_all, 'ro')
 
-                y_validation = np.vstack((y_validation, validation_labels))  # 用于验证的发送端产生的原始数据
-                y_validation_pred = np.vstack((y_validation_pred, y_validation_pred_j))
-        ber_val, fer_val = calc_ber_fer(validation_snr, y_validation_pred[1:, :], y_validation[1:, :],
-                                        batch_size_validation * batches_for_val)
-        epoch_turns = int(i / batch_in_epoch)
-        BER_all[0, epoch_turns] = ber_val
+            # print & write to file
+            print('SNR[dB] validation - ', k_sf)
+            print('BER validation - ', ber_val)
+            print('FER validation - ', fer_val)  # FER frame error rates 误帧率
 
-
-        # print & write to file
-        print('SNR[dB] validation - ', validation_snr)
-        print('BER validation - ', ber_val)
-        print('FER validation - ', fer_val)  # FER frame error rates 误帧率
-
-
-        # 把每次误码率写入文件
-        print('epoch次数： ', epoch_turns, '训练次数：', i, '测试误码率: ', ber_val, '误帧率: ', fer_val, '\n', file=f)
+            # 把每次误码率写入文件
+            print('epoch次数： ', epoch_turns, '训练次数：', i, '测试误码率: ', ber_val, '误帧率: ', fer_val, '\n', file=f)
 
 # 记录训练结束时间
 end_time = time.time()
@@ -334,7 +322,7 @@ model.save_weights('DNN_model_weights_JY.h5')   # 只保留权重参数
 
 
 # 画图 训练次数影响误码率
-plt.plot(validation_numbers, BER_all, 'ro')
+
 plt.grid(True)
 legend = []
 plt.legend(legend, loc='best')  # 图位置
