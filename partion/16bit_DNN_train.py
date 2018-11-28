@@ -149,6 +149,7 @@ def polar_transform_iter(u):  # encoding
 
 
 # Data Generation
+# 产生多少个码长为code_n的极化码，一旦信息位确定，这一点就确定了，所以对比产生测试数据的函数少一个输入参数
 def create_mix_epoch(code_k, code_n, scaling_factor, is_zeros_word):  # 把之前的几个函数做集成，开始做整套的编码过程
     X = np.zeros([1, code_n], dtype=np.float32)
     Y = np.zeros([1, code_n], dtype=np.int64)
@@ -220,15 +221,14 @@ def create_mix_epoch_validation(code_k, code_n, numOfWordSim, validation_snr, is
 
 
 # 这个东西还是有点毛病，这写得可读性太差了！
-def calc_ber_fer(snr_db, Y_v_pred, Y_v, numOfWordSim):
-    ber_test = np.zeros(snr_db.shape[0])
-    fer_test = np.zeros(snr_db.shape[0])
-    for i in range(0, snr_db.shape[0]):
-        A = polar_design_awgn(code_n, code_k, snr_db[i])
-        Y_v_pred_i = Y_v_pred[i*numOfWordSim:(i+1)*numOfWordSim,A]
-        Y_v_i = Y_v[i*numOfWordSim:(i+1)*numOfWordSim,A]
-        ber_test[i] = np.abs(((Y_v_pred_i > 0.5)-Y_v_i)).sum()/(Y_v_i.shape[0]*Y_v.shape[1])   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
-        fer_test[i] = (np.abs(np.abs(((Y_v_pred_i > 0.5)-Y_v_i))).sum(axis=1) > 0).sum()*1.0/Y_v_i.shape[0]  # .sum(axis=1)是把矩阵每一行的数都相加 .shape[0]即行数。0表示第一维行，1表示第二维列
+def calc_ber_fer(Y_v_pred, Y_v):
+    ber_test = np.zeros(Y_v_pred.shape[0])   # 每一行都应该有一个误码率
+    count = 0
+    for i in range(0, Y_v_pred.shape[0]):
+        ber_test[i] = np.abs(((Y_v_pred[i, :] > 0.5)-Y_v[i, :])).sum()/Y_v_pred.shape[1]   # np.abs返回絕對值；(Y_v_pred_i<0.5)直接判断小于0.5则true判为1
+        if ber_test[i] != 0:
+            count = count + 1
+    fer_test = count / Y_v_pred.shape[0]  # .sum(axis=1)是把矩阵每一行的数都相加 .shape[0]即行数。0表示第一维行，1表示第二维列
     return ber_test, fer_test
 
 
@@ -291,7 +291,12 @@ for i in range(num_of_batch):  # range是个for循环一样的东西；num_of_ba
         for k_sf in validation_snr:  # 测试多个信噪比
             # 测试时格外产生一些数据；用非0的数据集做测试
             validation_data, validation_labels = create_mix_epoch_validation(code_k, code_n, batch_size_validation, k_sf, is_zeros_word=test_on_zero_word)
-            ber_val, fer_val = calc_ber_fer(k_sf, y_validation_pred, validation_labels, batch_size_validation * batches_for_val)
+            ber_val_batch, fer_val = calc_ber_fer(y_validation_pred, validation_labels)
+
+            # ##############################################
+            # 这里有毛病！！！！！ber_val_batch是向量，fer_val是数值
+            # 后面的都得改！！！！
+            # ############################################
             epoch_turns = int(i / batch_in_epoch)
             BER_all[0, epoch_turns] = ber_val
 
